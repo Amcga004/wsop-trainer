@@ -1,0 +1,687 @@
+'use client'
+
+import { useState, useCallback, useRef, useEffect } from 'react'
+import {
+  createHand, processHeroAction, advanceToNextStreet, createTable, assignPositions,
+  type HandEngine, type HeroOption, type HeroDecision, type Seat,
+} from '../engine/handEngine'
+import { createTournament, endTournament } from '../lib/saveTournament'
+import { saveDecision } from '../lib/saveDecision'
+import {
+  getBB, getSB, getAnte, getBBDepth, getDay,
+  getPlayersLeft, STARTING_STACK, TOTAL_LEVELS,
+  HANDS_PER_LEVEL, ITM_PLAYERS, isNearBubble, isItm,
+  getDealerButtonForHand,
+} from '../engine/tournamentStructure'
+import { QSCORE, QLABEL, type Quality, type SessionMode, type DecisionRecord } from '../types'
+
+const SAVE_KEY = 'wsop_trainer_save'
+
+// ─────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────
+
+export type GamePhase =
+  | 'lobby'
+  | 'playing'
+  | 'outcome'
+  | 'villain_guess'
+  | 'villain_reveal'
+  | 'recap'
+  | 'level_up'
+  | 'day_break'
+  | 'itm'
+  | 'bust'
+  | 'win'
+
+export interface StreetResult {
+  street:      string
+  board:       { r: string; s: string }[]
+  heroAction:  HeroOption
+  chipDelta:   number
+  preDesc:     string
+  postDesc:    string
+}
+
+export interface GameState {
+  phase:            GamePhase
+  mode:             SessionMode
+  tournamentId:     string | null
+
+  // Tournament progression
+  levelIndex:       number
+  handInLevel:      number
+  totalHands:       number
+  playersLeft:      number
+  isItm:            boolean
+
+  // Table state (persists across hands)
+  tableSeats:       Omit<Seat, 'position'>[]
+  dealerButton:     number   // which seat index is BTN
+  heroSeatIndex:    number   // always 4
+
+  // Current hand engine (null between hands)
+  engine:           HandEngine | null
+
+  // Hand history for recap
+  streetResults:    StreetResult[]
+  heroStackBefore:  number   // stack at start of hand
+
+  // Last decision outcome (for outcome phase)
+  lastOption:       HeroOption | null
+  lastChipDelta:    number
+  lastDecision:     HeroDecision | null
+
+  // Villain guess state
+  guessOptions:     string[]   // 4 hand strings to guess from
+  guessCorrect:     string     // the actual villain hand string
+
+  // Scoring
+  sessionScore:     number
+  sessionMaxScore:  number
+  sessionDecisions: DecisionRecord[]
+
+  // Chip history for graph
+  chipHistory:      number[]
+  heroStack:        number
+}
+
+// ─────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────
+
+function makeInitialState(mode: SessionMode): GameState {
+  const startLevel = mode === 'day2' ? 22 : mode === 'day3' ? 39 : 0
+  const tableSeats = createTable(STARTING_STACK)
+  return {
+    phase:            'lobby',
+    mode,
+    tournamentId:     null,
+    levelIndex:       startLevel,
+    handInLevel:      0,
+    totalHands:       0,
+    playersLeft:      getPlayersLeft(startLevel),
+    isItm:            false,
+    tableSeats,
+    dealerButton:     0,
+    heroSeatIndex:    4,
+    engine:           null,
+    streetResults:    [],
+    heroStackBefore:  STARTING_STACK,
+    lastOption:       null,
+    lastChipDelta:    0,
+    lastDecision:     null,
+    guessOptions:     [],
+    guessCorrect:     '',
+    sessionScore:     0,
+    sessionMaxScore:  0,
+    sessionDecisions: [],
+    chipHistory:      [STARTING_STACK],
+    heroStack:        STARTING_STACK,
+  }
+}
+
+const RANK_ORDER = ['A','K','Q','J','T','9','8','7','6','5','4','3','2']
+
+function toHandNotation(c1r: string, c2r: string, suited: boolean): string {
+  const i1 = RANK_ORDER.indexOf(c1r)
+  const i2 = RANK_ORDER.indexOf(c2r)
+  const [hi, lo] = i1 <= i2 ? [c1r, c2r] : [c2r, c1r]
+  if (hi === lo) return `${hi}${lo}`
+  return `${hi}${lo}${suited ? 's' : 'o'}`
+}
+
+function generatePlausibleWrongAnswers(correct: string, count = 3): string[] {
+  const combos = [
+    'AKs','AQs','AJs','ATs','A9s','A8s','A5s','A4s','A3s','A2s',
+    'AKo','AQo','AJo','ATo','KQs','KJs','KTs','KQo','KJo',
+    'QJs','QTs','QJo','JTs','JTo','T9s','T9o','98s','87s','76s','65s','54s',
+    'KK','QQ','JJ','TT','99','88','77','66','55','44','33','22',
+  ]
+  const pool = combos.filter(h => h !== correct)
+  return pool.sort(() => Math.random() - 0.5).slice(0, count)
+}
+
+function buildGuessOptions(engine: HandEngine): { options: string[]; correct: string } {
+  const villain = engine.showdownSeat
+  if (!villain?.holeCards) return { options: [], correct: '' }
+
+  const [c1, c2] = villain.holeCards
+  const correct = toHandNotation(c1.r, c2.r, c1.s === c2.s)
+
+  const decoys = generatePlausibleWrongAnswers(correct, 3)
+  const options = [...decoys, correct].sort(() => Math.random() - 0.5)
+  return { options, correct }
+}
+
+function isTrivialFold(engine: HandEngine): boolean {
+  const decision = engine.currentDecision
+  if (!decision || decision.street !== 'preflop') return false
+  const onlyFold = decision.options.length <= 2 &&
+    decision.options.every(o => o.quality === 'best' || o.type === 'fold')
+  const earlyPos = ['UTG', 'UTG1', 'UTG2'].includes(decision.heroPos)
+  const noAction = decision.activePlayers <= 2
+  return onlyFold && earlyPos && noAction
+}
+
+// ─────────────────────────────────────────────────────────────
+// HOOK
+// ─────────────────────────────────────────────────────────────
+
+export function useGameState(initialMode: SessionMode = 'full') {
+  const [state, setState] = useState<GameState>(() => makeInitialState(initialMode))
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  // ── Start tournament ──────────────────────────────────────
+  const startTournament = useCallback(async (mode: SessionMode) => {
+    const tournamentId = await createTournament(mode)
+    setState(prev => {
+      const fresh = makeInitialState(mode)
+      const btn = getDealerButtonForHand(0, fresh.heroSeatIndex)
+      const finalEngine = createHand(assignPositions(fresh.tableSeats, btn), fresh.heroSeatIndex, fresh.levelIndex, fresh.playersLeft)
+      return {
+        ...fresh,
+        phase:        'playing',
+        tournamentId,
+        dealerButton: btn,
+        engine:       finalEngine,
+        heroStack:    finalEngine.heroSeat.stack,
+        heroStackBefore: finalEngine.heroSeat.stack,
+      }
+    })
+  }, [])
+
+  // ── Hero takes an action ──────────────────────────────────
+  const takeAction = useCallback((optionIndex: number) => {
+    setState(prev => {
+      if (!prev.engine || prev.phase !== 'playing') return prev
+      const decision = prev.engine.currentDecision
+      if (!decision) return prev
+
+      const option = decision.options[optionIndex]
+      const savedDecision = { ...decision, options: [...decision.options] }
+      const points = QSCORE[option.quality]
+      const stackBefore = prev.heroStack
+      // chipDelta = net additional chips committed this action
+      // Fold costs 0 additional — chips already bet were already tracked
+      const chipDelta = -option.chipCost
+
+      // Record decision for DB
+      const decisionRecord: DecisionRecord = {
+        scenarioType: `${decision.street}_${option.type}`,
+        street:       decision.street,
+        heroPos:      decision.heroPos,
+        quality:      option.quality,
+        points,
+        stackBefore,
+        stackAfter:   stackBefore + chipDelta,
+        chipDelta,
+        actionLabel:  option.label,
+        coaching:     option.coaching,
+      }
+
+      // Process action through engine
+      const newEngine = {
+        ...prev.engine,
+        board:       [...(prev.engine?.board ?? [])],
+        handLog:     [...(prev.engine?.handLog ?? [])],
+        streetLog:   [...(prev.engine?.streetLog ?? [])],
+        activeSeats: [...(prev.engine?.activeSeats ?? [])],
+        seats:       (prev.engine?.seats ?? []).map(s => ({ ...s })),
+        heroSeat:    { ...(prev.engine?.heroSeat ?? {}) } as typeof prev.engine.heroSeat,
+      }
+      const nextDecision = processHeroAction(newEngine, option, prev.levelIndex, prev.playersLeft)
+      newEngine.currentDecision = nextDecision
+
+      // Record street result (after engine so postDesc is available)
+      const streetResult: StreetResult = {
+        street:    decision.street,
+        board:     [...decision.board],
+        heroAction: option,
+        chipDelta,
+        preDesc:   savedDecision?.desc ?? '',
+        postDesc:  newEngine.pendingStreetDesc ?? '',
+      }
+
+      const newScore    = prev.sessionScore + points
+      const newMaxScore = prev.sessionMaxScore + 10
+      const newResults  = [...prev.streetResults, streetResult]
+      const newDecisions = [...prev.sessionDecisions, decisionRecord]
+
+      // Fire-and-forget per-action save
+      if (typeof window !== 'undefined' && prev.tournamentId) {
+        saveDecision({
+          tournamentId: prev.tournamentId,
+          street:       decision.street,
+          heroPos:      decision.heroPos,
+          action:       option.label,
+          quality:      option.quality,
+          pot:          decision.pot,
+          chipCost:     option.chipCost,
+          levelIndex:   prev.levelIndex,
+          playersLeft:  prev.playersLeft,
+        }).catch(() => {})
+      }
+
+      // Determine next phase
+      let nextPhase: GamePhase = 'outcome'
+      let guessOptions: string[] = []
+      let guessCorrect = ''
+
+      // If hand is over — resolve chips
+      if (newEngine.isOver) {
+        const heroInvested = newEngine.heroSeat.invested
+        const pot = newEngine.pot
+
+        if (newEngine.heroWon && !newEngine.isTie) {
+          // Hero wins — credit net gain to hero
+          const gain = pot - heroInvested
+          newEngine.heroSeat.stack += gain
+        } else if (newEngine.isTie) {
+          // Chop — both players get their half back
+          const villainShare = Math.floor(pot / 2)
+          const tieVillain = newEngine.showdownSeat
+          if (tieVillain) {
+            const vs = newEngine.seats.find(s => s.seatIndex === tieVillain.seatIndex)
+            if (vs) vs.stack += villainShare
+            tieVillain.stack += villainShare
+          }
+          newEngine.heroSeat.stack += pot - villainShare
+        } else {
+          // Villain wins
+          const winner = newEngine.showdownSeat
+            ?? newEngine.activeSeats.find(
+                s => s.seatIndex !== newEngine.heroSeat.seatIndex && !s.folded
+              )
+          if (winner) {
+            const ws = newEngine.seats.find(s => s.seatIndex === winner.seatIndex)
+            const winnerInvested = ws?.invested ?? pot
+            const heroInvestedThisHand = newEngine.heroSeat.invested
+            if (winner.allIn && winnerInvested < heroInvestedThisHand) {
+              // Side pot: villain all-in for less — they can only win the main pot
+              const mainPot = Math.min(winnerInvested * 2, pot)
+              const sidePot = pot - mainPot
+              if (ws) ws.stack += mainPot
+              winner.stack += mainPot
+              newEngine.heroSeat.stack += sidePot
+            } else {
+              if (ws) ws.stack += pot
+              winner.stack += pot
+            }
+          }
+        }
+
+        // If went to showdown — show guess screen
+        if (newEngine.showdownSeat) {
+          const guess = buildGuessOptions(newEngine)
+          if (guess.options.length > 0) {
+            guessOptions = guess.options
+            guessCorrect = guess.correct
+          }
+          nextPhase = 'outcome' // show coaching first, then continue to guess
+        }
+      }
+
+      return {
+        ...prev,
+        engine:           newEngine,
+        heroStack:        newEngine.heroSeat.stack,
+        streetResults:    newResults,
+        sessionScore:     newScore,
+        sessionMaxScore:  newMaxScore,
+        sessionDecisions: newDecisions,
+        lastOption:       option,
+        lastDecision:     savedDecision,
+        lastChipDelta:    newEngine.isOver
+          ? (newEngine.heroWon
+              ? newEngine.pot - newEngine.heroSeat.invested
+              : -prev.heroStackBefore + newEngine.heroSeat.stack)
+          : chipDelta,
+        phase:            nextPhase,
+        guessOptions,
+        guessCorrect,
+      }
+    })
+  }, [])
+
+  // ── Continue after outcome screen ─────────────────────────
+  const continueAfterOutcome = useCallback(() => {
+    setState(prev => {
+      if (!prev.engine) return prev
+
+      // Pending street advance — deal next card(s)
+      if (prev.engine.pendingAdvance) {
+        const engineClone: HandEngine = {
+          ...prev.engine,
+          board:       [...prev.engine.board],
+          handLog:     [...prev.engine.handLog],
+          streetLog:   [...prev.engine.streetLog],
+          activeSeats: [...prev.engine.activeSeats],
+          seats:       prev.engine.seats.map(s => ({ ...s })),
+          heroSeat:    { ...prev.engine.heroSeat },
+        }
+        const nextDecision = advanceToNextStreet(engineClone, prev.levelIndex, prev.playersLeft)
+        engineClone.currentDecision = nextDecision
+
+        // Chip resolution if hand ended during advance
+        if (engineClone.isOver && engineClone.heroWon && !engineClone.isTie) {
+          const gain = engineClone.pot - engineClone.heroSeat.invested
+          engineClone.heroSeat.stack += gain
+        }
+
+        let nextPhase: GamePhase = nextDecision ? 'playing' : 'outcome'
+        let guessOptions: string[] = prev.guessOptions
+        let guessCorrect = prev.guessCorrect
+        if (!nextDecision && engineClone.showdownSeat) {
+          const guess = buildGuessOptions(engineClone)
+          guessOptions = guess.options
+          guessCorrect = guess.correct
+        }
+
+        return {
+          ...prev,
+          engine:      engineClone,
+          heroStack:   engineClone.heroSeat.stack,
+          guessOptions,
+          guessCorrect,
+          phase:       nextPhase,
+        }
+      }
+
+      // Hand still going — next street decision ready
+      if (!prev.engine.isOver && prev.engine.currentDecision) {
+        return { ...prev, phase: 'playing' }
+      }
+
+      // Hand is over
+      if (prev.engine.isOver) {
+        // Showdown — go to guess
+        if (prev.guessOptions.length > 0) {
+          return { ...prev, phase: 'villain_guess' }
+        }
+        // No showdown — go to recap
+        return { ...prev, phase: 'recap' }
+      }
+
+      return { ...prev, phase: 'recap' }
+    })
+  }, [])
+
+  // ── Villain guess ─────────────────────────────────────────
+  const submitGuess = useCallback((guess: string) => {
+    setState(prev => ({ ...prev, phase: 'villain_reveal' }))
+  }, [])
+
+  // ── Next hand ─────────────────────────────────────────────
+  const nextHand = useCallback(() => {
+    setState(prev => {
+      if (!prev.engine) return prev
+
+      const newTotalHands  = prev.totalHands + 1
+      const newHandInLevel = prev.handInLevel + 1
+      const newPlayersLeft = Math.max(1, getPlayersLeft(prev.levelIndex))
+      const heroStack      = prev.heroStack
+
+      // Save decisions to DB
+      if (prev.tournamentId) {
+        prev.sessionDecisions.slice(-prev.streetResults.length).forEach(d =>
+          saveDecision({
+            tournamentId:  prev.tournamentId,
+            handNumber:    newTotalHands,
+            levelIndex:    prev.levelIndex,
+            scenarioType:  d.scenarioType,
+            street:        d.street,
+            heroPos:       d.heroPos,
+            action:        d.actionLabel,
+            quality:       d.quality,
+            points:        d.points,
+            stackBefore:   d.stackBefore,
+            stackAfter:    d.stackAfter,
+            chipDelta:     d.chipDelta,
+            coaching:      d.coaching,
+          })
+        )
+      }
+
+      // Bust check
+      if (heroStack < getBB(prev.levelIndex)) {
+        return { ...prev, phase: 'bust', playersLeft: newPlayersLeft }
+      }
+
+      // ITM check
+      if (!prev.isItm && isItm(newPlayersLeft)) {
+        return {
+          ...prev,
+          totalHands:  newTotalHands,
+          handInLevel: newHandInLevel,
+          playersLeft: newPlayersLeft,
+          isItm:       true,
+          phase:       'itm',
+        }
+      }
+
+      // Level up check
+      if (newHandInLevel >= HANDS_PER_LEVEL) {
+        const newLevelIndex = prev.levelIndex + 1
+        if (newLevelIndex >= TOTAL_LEVELS) {
+          return {
+            ...prev,
+            totalHands:  newTotalHands,
+            handInLevel: 0,
+            levelIndex:  newLevelIndex,
+            playersLeft: newPlayersLeft,
+            chipHistory: [...prev.chipHistory, heroStack],
+            phase:       'win',
+          }
+        }
+        const isDayBreak = getDay(newLevelIndex) !== getDay(prev.levelIndex)
+        return {
+          ...prev,
+          totalHands:  newTotalHands,
+          handInLevel: 0,
+          levelIndex:  newLevelIndex,
+          playersLeft: newPlayersLeft,
+          chipHistory: [...prev.chipHistory, heroStack],
+          phase:       isDayBreak ? 'day_break' : 'level_up',
+        }
+      }
+
+      // Advance dealer button deterministically through all 9 positions
+      const levelHandIndex = newTotalHands % HANDS_PER_LEVEL
+      const newDealerButton = getDealerButtonForHand(levelHandIndex, prev.heroSeatIndex)
+
+      // Update villain stacks from engine results, with inter-hand variance
+      const bb = getBB(prev.levelIndex)
+      const updatedTableSeats = prev.tableSeats.map((seat, i) => {
+        if (i === prev.heroSeatIndex) return { ...seat, stack: heroStack }
+        const engineSeat = prev.engine!.seats.find(s => s.seatIndex === i)
+        if (!engineSeat) return seat
+        const baseStack = Math.max(bb * 3, engineSeat.stack)
+        const roll = Math.random()
+        let newStack: number
+        if (roll < 0.06) {
+          // Bust — replace with a new player at median stack
+          newStack = bb * 50
+        } else if (roll < 0.14) {
+          // Significant loss — floor at 3BB
+          newStack = bb * 3
+        } else if (roll < 0.22) {
+          // Big win — cap at 200BB
+          newStack = bb * 200
+        } else {
+          newStack = baseStack
+        }
+        return { ...seat, stack: newStack }
+      })
+
+      const btn = newDealerButton
+      const finalEngine = createHand(assignPositions(updatedTableSeats, btn), prev.heroSeatIndex, prev.levelIndex, newPlayersLeft)
+
+      return {
+        ...prev,
+        engine:          finalEngine,
+        tableSeats:      updatedTableSeats,
+        dealerButton:    btn,
+        totalHands:      newTotalHands,
+        handInLevel:     newHandInLevel,
+        playersLeft:     newPlayersLeft,
+        heroStack:       finalEngine.heroSeat.stack,
+        heroStackBefore: finalEngine.heroSeat.stack,
+        streetResults:   [],
+        lastOption:      null,
+        lastChipDelta:   0,
+        guessOptions:    [],
+        guessCorrect:    '',
+        phase:           'playing',
+      }
+    })
+  }, [])
+
+  // ── Continue after level up / day break / ITM ─────────────
+  const continueTournament = useCallback(() => {
+    setState(prev => {
+      const updatedTableSeats = prev.tableSeats.map((seat, i) =>
+        i === prev.heroSeatIndex ? { ...seat, stack: prev.heroStack } : seat
+      )
+      let btn = (prev.dealerButton + 1) % 9
+      let finalEngine = createHand(assignPositions(updatedTableSeats, btn), prev.heroSeatIndex, prev.levelIndex, prev.playersLeft)
+      let attempts = 0
+      while (isTrivialFold(finalEngine) && attempts < 3) {
+        attempts++
+        btn = (btn + 1) % 9
+        finalEngine = createHand(assignPositions(updatedTableSeats, btn), prev.heroSeatIndex, prev.levelIndex, prev.playersLeft)
+      }
+      return {
+        ...prev,
+        engine:          finalEngine,
+        tableSeats:      updatedTableSeats,
+        dealerButton:    btn,
+        heroStack:       finalEngine.heroSeat.stack,
+        heroStackBefore: finalEngine.heroSeat.stack,
+        streetResults:   [],
+        lastOption:      null,
+        phase:           'playing',
+      }
+    })
+  }, [])
+
+  // ── Finalize tournament ───────────────────────────────────
+  const finalizeTournament = useCallback(async (cashed: boolean) => {
+    const s = stateRef.current
+    if (!s.tournamentId) return
+    await endTournament(
+      s.tournamentId, s.heroStack, s.levelIndex,
+      s.sessionScore, s.sessionMaxScore,
+      s.sessionDecisions.length, cashed,
+      getDay(s.levelIndex), s.levelIndex, s.playersLeft,
+    )
+  }, [])
+
+  // ── localStorage save/resume ──────────────────────────────
+  const hasSavedGame = useCallback((): boolean => {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY)
+      if (!raw) return false
+      const data = JSON.parse(raw)
+      return Date.now() - data.savedAt < 24 * 60 * 60 * 1000
+    } catch {
+      return false
+    }
+  }, [])
+
+  const clearSavedGame = useCallback(() => {
+    localStorage.removeItem(SAVE_KEY)
+  }, [])
+
+  const resumeTournament = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY)
+      if (!raw) return
+      const data = JSON.parse(raw)
+      const heroSeatIndex = data.heroSeatIndex ?? 4
+      const newDealerButton = getDealerButtonForHand(
+        data.totalHands % HANDS_PER_LEVEL,
+        heroSeatIndex
+      )
+      const rawSeats = createTable(data.heroStack)
+      const positioned = assignPositions(rawSeats, newDealerButton)
+      const seatsWithStacks = positioned.map((seat, i) => {
+        if (i === heroSeatIndex) return { ...seat, stack: data.heroStack }
+        const saved = data.tableSeats?.find((s: { seatIndex: number }) => s.seatIndex === i)
+        return { ...seat, stack: saved?.stack ?? data.heroStack }
+      })
+      const engine = createHand(seatsWithStacks, heroSeatIndex, data.levelIndex, data.playersLeft)
+      setState(prev => ({
+        ...makeInitialState(prev.mode),
+        engine,
+        heroStack:       data.heroStack,
+        levelIndex:      data.levelIndex,
+        playersLeft:     data.playersLeft,
+        totalHands:      data.totalHands,
+        sessionScore:    data.sessionScore,
+        sessionMaxScore: data.sessionMaxScore,
+        dealerButton:    newDealerButton,
+        heroSeatIndex,
+        tableSeats:      seatsWithStacks,
+        phase:           'playing',
+      }))
+      localStorage.removeItem(SAVE_KEY)
+    } catch (e) {
+      console.warn('Could not resume tournament', e)
+      localStorage.removeItem(SAVE_KEY)
+    }
+  }, [])
+
+  // Auto-save after each hand completes
+  useEffect(() => {
+    if (state.phase === 'recap' || state.phase === 'playing') {
+      try {
+        const saveData = {
+          heroStack:       state.heroStack,
+          levelIndex:      state.levelIndex,
+          playersLeft:     state.playersLeft,
+          totalHands:      state.totalHands,
+          sessionScore:    state.sessionScore,
+          sessionMaxScore: state.sessionMaxScore,
+          dealerButton:    state.dealerButton,
+          heroSeatIndex:   state.heroSeatIndex,
+          tableSeats:      state.tableSeats.map(s => ({
+            seatIndex: s.seatIndex,
+            stack:     s.stack,
+            archetype: s.archetype,
+          })),
+          savedAt: Date.now(),
+        }
+        localStorage.setItem(SAVE_KEY, JSON.stringify(saveData))
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  }, [state.totalHands, state.phase])
+
+  // ── Computed ──────────────────────────────────────────────
+  const bb        = getBB(state.levelIndex)
+  const sb        = getSB(state.levelIndex)
+  const ante      = getAnte(state.levelIndex)
+  const bbDepth   = getBBDepth(state.heroStack, state.levelIndex)
+  const day       = getDay(state.levelIndex)
+  const nearBubble = isNearBubble(state.playersLeft)
+  const scorePct  = state.sessionMaxScore > 0
+    ? Math.round(state.sessionScore / state.sessionMaxScore * 100) : 0
+
+  return {
+    state,
+    startTournament,
+    takeAction,
+    continueAfterOutcome,
+    submitGuess,
+    nextHand,
+    continueTournament,
+    finalizeTournament,
+    resumeTournament,
+    hasSavedGame,
+    clearSavedGame,
+    bb, sb, ante, bbDepth, day, nearBubble, scorePct,
+  }
+}
