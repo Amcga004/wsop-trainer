@@ -92,6 +92,15 @@ export interface HandSummary {
   heroWon:        boolean
 }
 
+export interface VillainProfile {
+  seatIndex:      number
+  position:       string
+  actionSequence: string[]   // preflop code, then one entry per street
+  rangeStrength:  number     // 1-10 (0 = unknown/folded)
+  rangeNarrow:    string     // human-readable description
+  isPrimary:      boolean
+}
+
 // ─────────────────────────────────────────────────────────────
 // DECK
 // ─────────────────────────────────────────────────────────────
@@ -616,6 +625,292 @@ function resolveVillainPreflop(
 // Generate quality-rated options for hero based on situation
 // ─────────────────────────────────────────────────────────────
 
+function r100(n: number): number {
+  return Math.round(n / 100) * 100
+}
+
+export function scoreSequence(seq: string[]): { strength: number; description: string } {
+  const key = seq.join('_')
+
+  // ── FOLDED ───────────────────────────────────────────────────
+  if (seq.length === 0 || seq[0] === 'fold') {
+    return { strength: 0, description: 'Folded' }
+  }
+
+  // ── PREFLOP ONLY ─────────────────────────────────────────────
+  const PREFLOP_ONLY: Record<string, [number, string]> = {
+    'limp':   [3, 'Limped — small pairs, speculative hands, weak aces'],
+    'call':   [5, 'Called a raise — pairs, suited broadways, connectors'],
+    'rfi':    [5, 'Opened — full position-based opening range'],
+    '3bet':   [7, '3-bet — premiums plus some suited bluffs (AK, QQ+, A5s)'],
+    '3bet_c': [7, '3-bet, called 4-bet — KK, AA, QQ, AK'],
+    '4bet':   [9, '4-bet — AA, KK, QQ, AK'],
+    '4bet_c': [9, '4-bet, called 5-bet — AA, KK'],
+    'shove':  [9, 'Shoved preflop — premium at depth or short stack'],
+  }
+  if (PREFLOP_ONLY[key]) {
+    const [s, d] = PREFLOP_ONLY[key]
+    return { strength: s, description: d }
+  }
+
+  // ── FLOP FOLDS ───────────────────────────────────────────────
+  const FLOP_FOLD: Record<string, [number, string]> = {
+    'limp_f':   [0, 'Limped, folded flop'],
+    'call_xf':  [0, 'Called preflop, check-folded flop'],
+    'call_b_f': [0, 'Called preflop, donk bet, folded to raise'],
+    'rfi_b_f':  [0, 'C-bet flop, folded to raise'],
+    'rfi_xf':   [0, 'Opened, check-folded flop'],
+    '3bet_b_f': [0, '3-bet pot c-bet, folded to raise'],
+    '3bet_xf':  [0, '3-bet, check-folded flop'],
+    'limp_xf':  [0, 'Limped, check-folded flop'],
+    'limp_b_f': [0, 'Limped, donk bet, folded to raise'],
+  }
+  if (FLOP_FOLD[key]) {
+    const [s, d] = FLOP_FOLD[key]
+    return { strength: s, description: d }
+  }
+
+  // ── FLOP COMPLETE ────────────────────────────────────────────
+  const FLOP_COMPLETE: Record<string, [number, string]> = {
+    'rfi_b':   [5, 'C-bet flop — top pair+, strong draws, some air bluffs'],
+    'rfi_x':   [3, 'Checked flop — middle pairs, backdoors, some traps'],
+    'rfi_xc':  [4, 'Checked flop, called hero bet — medium strength, draws'],
+    'rfi_xr':  [8, 'Check-raised flop — sets, two pair, big combo draws'],
+    'rfi_c':   [4, 'Called flop bet — medium pairs, draws'],
+    'call_b':  [6, 'Donk bet flop — usually strong OOP hand'],
+    'call_xc': [4, 'Check-called flop — medium pairs, draws, floating'],
+    'call_xr': [8, 'Check-raised flop — sets, two pair, big draws'],
+    'call_c':  [4, 'Called c-bet — medium pairs, draws, floating'],
+    '3bet_b':  [6, 'C-bet in 3-bet pot — overpairs, top pair, some air'],
+    '3bet_x':  [4, 'Checked 3-bet pot — medium strength or rare trap'],
+    '3bet_xc': [5, 'Check-called in 3-bet pot — medium strong, draws'],
+    '3bet_xr': [9, 'Check-raised in 3-bet pot — very strong, sets, two pair'],
+    '3bet_c':  [5, 'Called in 3-bet pot — medium strong hand'],
+    'limp_b':  [5, 'Bet after limping — medium strength'],
+    'limp_xc': [3, 'Check-called after limping — medium weak'],
+    'limp_xr': [7, 'Check-raised after limping — strong, trapping'],
+    'limp_c':  [3, 'Called after limping — medium weak'],
+  }
+  if (FLOP_COMPLETE[key]) {
+    const [s, d] = FLOP_COMPLETE[key]
+    return { strength: s, description: d }
+  }
+
+  // ── TURN ─────────────────────────────────────────────────────
+  const TURN: Record<string, [number, string]> = {
+    'rfi_b_c_b':   [7, 'Called c-bet, bet turn — strong pair+, turned equity'],
+    'rfi_b_c_x':   [3, 'Called c-bet, checked turn — gave up, medium weak'],
+    'rfi_b_c_r':   [9, 'Called c-bet, raised turn — two pair+, sets, made draws'],
+    'rfi_b_c_f':   [0, 'Called c-bet, folded turn'],
+    'rfi_b_c_xc':  [3, 'Called c-bet, check-called turn — medium, draw, stubborn'],
+    'rfi_b_c_xr':  [9, 'Called c-bet, check-raised turn — trapping, very strong'],
+    'rfi_b_c_xf':  [0, 'Called c-bet, check-folded turn'],
+    'rfi_b_b':     [7, 'Double barreled — strong value, committed range'],
+    'rfi_b_x':     [3, 'C-bet flop, checked turn — gave up bluffs, showdown value'],
+    'rfi_x_b':     [5, 'Checked flop, bet turn — delayed c-bet, medium-strong'],
+    'rfi_x_x':     [2, 'Checked both streets — very weak or rare deep trap'],
+    'rfi_x_c':     [4, 'Checked flop, called turn — medium, pot control'],
+    'rfi_x_r':     [8, 'Checked flop, raised turn — trapping, very strong'],
+    'rfi_x_xc':    [3, 'Check-check flop, check-called turn — medium weak'],
+    'rfi_x_xr':    [9, 'Check-check flop, check-raised turn — massive trap'],
+    'rfi_x_xf':    [0, 'Check-check flop, check-folded turn'],
+    'rfi_xc_b':    [6, 'Check-called flop, bet turn — improved, strong'],
+    'rfi_xc_x':    [3, 'Check-called flop, checked turn — medium weak'],
+    'rfi_xc_r':    [9, 'Check-called flop, raised turn — very strong'],
+    'rfi_xc_f':    [0, 'Check-called flop, folded turn'],
+    'rfi_xc_xc':   [3, 'Check-called both streets — weak, stubborn'],
+    'rfi_xc_xr':   [9, 'Check-called flop, check-raised turn — trap'],
+    'rfi_xc_xf':   [0, 'Check-called flop, check-folded turn'],
+    'rfi_xc_c':    [4, 'Check-called flop, called turn bet — medium'],
+    'rfi_xr_b':    [9, 'Check-raised flop, bet turn — very strong, value'],
+    'rfi_xr_x':    [5, 'Check-raised flop, checked turn — semi-bluff missed'],
+    'rfi_xr_c':    [8, 'Check-raised flop, called turn — strong, committed'],
+    'rfi_xr_r':    [10,'Check-raised flop, raised turn — absolute nuts'],
+    'rfi_xr_xc':   [6, 'Check-raised flop, check-called turn — draw or strong'],
+    'rfi_xr_xr':   [10,'Check-raised flop, check-raised turn — nutted'],
+    'call_xc_b':   [6, 'Check-called flop, bet turn — drew out or strong'],
+    'call_xc_x':   [3, 'Check-called flop, checked turn — gave up, medium weak'],
+    'call_xc_r':   [9, 'Check-called flop, raised turn — two pair+, very strong'],
+    'call_xc_f':   [0, 'Check-called flop, folded turn'],
+    'call_xc_xc':  [4, 'Check-called both streets — medium, draw, committed'],
+    'call_xc_xr':  [9, 'Check-called flop, check-raised turn — trap'],
+    'call_xc_xf':  [0, 'Check-called flop, check-folded turn'],
+    'call_xc_c':   [4, 'Check-called both streets — medium committed'],
+    'call_xr_b':   [9, 'Check-raised flop, bet turn — very strong value'],
+    'call_xr_x':   [5, 'Check-raised flop, checked turn — semi-bluff draw missed'],
+    'call_xr_c':   [8, 'Check-raised flop, called turn — strong, committed'],
+    'call_xr_r':   [10,'Check-raised flop, raised turn — absolute nuts'],
+    'call_xr_xc':  [6, 'Check-raised flop, check-called turn — draw or strong'],
+    'call_xr_xr':  [10,'Check-raised flop, check-raised turn — nutted'],
+    'call_xr_xf':  [0, 'Check-raised flop, check-folded turn'],
+    'call_b_b':    [7, 'Donk bet flop and turn — strong value'],
+    'call_b_x':    [4, 'Donk bet flop, checked turn — pot control or gave up'],
+    'call_b_c':    [6, 'Donk bet flop, called turn raise — committed strong'],
+    'call_b_r':    [9, 'Donk bet flop, raised turn — two pair+'],
+    'call_b_xc':   [4, 'Donk bet flop, check-called turn — medium'],
+    'call_b_xr':   [9, 'Donk bet flop, check-raised turn — trap'],
+    'call_b_xf':   [0, 'Donk bet flop, check-folded turn'],
+    '3bet_b_c_b':  [8, 'Called 3-bet c-bet, bet turn — very strong'],
+    '3bet_b_c_x':  [4, 'Called 3-bet c-bet, checked turn — gave up'],
+    '3bet_b_c_r':  [10,'Called 3-bet c-bet, raised turn — nutted'],
+    '3bet_b_c_xc': [5, 'Called 3-bet c-bet, check-called turn'],
+    '3bet_b_c_xr': [10,'Called 3-bet c-bet, check-raised turn — nutted'],
+    '3bet_b_c_xf': [0, 'Called 3-bet c-bet, check-folded turn'],
+    '3bet_b_b':    [8, 'Double barrel in 3-bet pot — strong value'],
+    '3bet_b_x':    [4, 'C-bet 3-bet pot, checked turn — gave up bluffs'],
+    '3bet_x_b':    [6, 'Checked 3-bet flop, bet turn — delayed value'],
+    '3bet_x_x':    [2, 'Checked both streets in 3-bet pot — very unusual'],
+    '3bet_x_c':    [5, 'Checked 3-bet flop, called turn'],
+    '3bet_x_r':    [9, 'Checked 3-bet flop, raised turn — trapping'],
+    '3bet_x_xc':   [4, 'Checked 3-bet flop, check-called turn'],
+    '3bet_x_xr':   [10,'Checked 3-bet flop, check-raised turn — nutted'],
+    '3bet_xc_b':   [6, 'Check-called 3-bet flop, bet turn — strong'],
+    '3bet_xc_x':   [3, 'Check-called 3-bet flop, checked turn'],
+    '3bet_xc_r':   [10,'Check-called 3-bet flop, raised turn — nutted'],
+    '3bet_xc_xc':  [5, 'Check-called both streets in 3-bet pot'],
+    '3bet_xc_xr':  [10,'Check-called 3-bet flop, check-raised turn — nutted'],
+    'limp_xc_b':   [5, 'Limped, check-called flop, bet turn'],
+    'limp_xc_x':   [2, 'Limped, check-called flop, checked turn — weak'],
+    'limp_xc_r':   [8, 'Limped, check-called flop, raised turn — strong'],
+    'limp_xc_xc':  [3, 'Limped, check-called both streets — weak'],
+    'limp_xc_xr':  [8, 'Limped, check-called flop, check-raised turn'],
+    'limp_xc_xf':  [0, 'Limped, check-called flop, check-folded turn'],
+    'limp_b_b':    [6, 'Limped, bet flop and turn — medium-strong'],
+    'limp_b_x':    [3, 'Limped, bet flop, checked turn — gave up'],
+    'limp_b_c':    [5, 'Limped, bet flop, called turn — committed'],
+    'limp_b_r':    [8, 'Limped, bet flop, raised turn — two pair+'],
+    'limp_xr_b':   [7, 'Limped, check-raised flop, bet turn — strong'],
+    'limp_xr_x':   [4, 'Limped, check-raised flop, checked turn — semi-bluff'],
+    'limp_xr_c':   [7, 'Limped, check-raised flop, called turn — strong'],
+    'limp_xr_r':   [10,'Limped, check-raised flop, raised turn — nutted'],
+  }
+  if (TURN[key]) {
+    const [s, d] = TURN[key]
+    return { strength: s, description: d }
+  }
+
+  // ── RIVER ────────────────────────────────────────────────────
+  const RIVER: Record<string, [number, string]> = {
+    'rfi_b_c_r_b':    [9,  'Raised turn, bet river — strong value betting'],
+    'rfi_b_c_r_x':    [7,  'Raised turn, checked river — pot control or trap'],
+    'rfi_b_c_r_c':    [8,  'Raised turn, called river — strong hand calling down'],
+    'rfi_b_c_r_r':    [10, 'Raised turn, raised river — absolute nuts'],
+    'rfi_b_c_r_xc':   [7,  'Raised turn, check-called river — strong showdown'],
+    'rfi_b_c_r_xr':   [10, 'Raised turn, check-raised river — nutted'],
+    'rfi_b_c_r_xf':   [0,  'Raised turn, check-folded river'],
+    'rfi_b_c_r_f':    [0,  'Raised turn, folded river'],
+    'call_xr_b_b':    [10, 'Check-raised flop, bet turn, bet river — value'],
+    'call_xr_b_x':    [7,  'Check-raised flop, bet turn, checked river'],
+    'call_xr_b_c':    [9,  'Check-raised flop, bet turn, called river'],
+    'call_xr_b_r':    [10, 'Check-raised flop, bet turn, raised river — nuts'],
+    'call_xr_b_xc':   [8,  'Check-raised flop, bet turn, check-called river'],
+    'call_xr_b_xr':   [10, 'Check-raised flop, bet turn, check-raised river'],
+    'call_xr_b_f':    [0,  'Check-raised flop, bet turn, folded river'],
+    'rfi_b_c_b_b':    [8,  'Called c-bet, bet turn, bet river — strong value'],
+    'rfi_b_c_b_x':    [5,  'Called c-bet, bet turn, checked river — showdown'],
+    'rfi_b_c_b_c':    [7,  'Called c-bet, bet turn, called river — medium-strong'],
+    'rfi_b_c_b_r':    [9,  'Called c-bet, bet turn, raised river — polarized'],
+    'rfi_b_c_b_xc':   [6,  'Called c-bet, bet turn, check-called river'],
+    'rfi_b_c_b_xr':   [9,  'Called c-bet, bet turn, check-raised river'],
+    'rfi_b_c_b_f':    [0,  'Called c-bet, bet turn, folded river'],
+    'rfi_b_c_b_xf':   [0,  'Called c-bet, bet turn, check-folded river'],
+    'rfi_b_b_b':      [8,  'Triple barrel — strong value or committed bluff'],
+    'rfi_b_b_x':      [5,  'Double barrel, checked river — gave up or showdown'],
+    'rfi_b_b_c':      [7,  'Double barrel, called river — medium-strong'],
+    'rfi_b_b_r':      [9,  'Double barrel, raised river — polarized nuts or bluff'],
+    'rfi_b_b_xc':     [6,  'Double barrel, check-called river'],
+    'rfi_b_b_xr':     [9,  'Double barrel, check-raised river — polarized'],
+    'rfi_b_b_f':      [0,  'Double barrel, folded river'],
+    'rfi_b_b_xf':     [0,  'Double barrel, check-folded river'],
+    'call_xc_b_b':    [7,  'Check-called flop, bet turn, bet river — value'],
+    'call_xc_b_x':    [4,  'Check-called flop, bet turn, checked river'],
+    'call_xc_b_c':    [6,  'Check-called flop, bet turn, called river'],
+    'call_xc_b_r':    [9,  'Check-called flop, bet turn, raised river — strong'],
+    'call_xc_b_xc':   [5,  'Check-called flop, bet turn, check-called river'],
+    'call_xc_b_xr':   [9,  'Check-called flop, bet turn, check-raised river'],
+    'call_xc_b_f':    [0,  'Check-called flop, bet turn, folded river'],
+    'call_xc_xc_b':   [5,  'Check-called both, bet river — value or bluff'],
+    'call_xc_xc_x':   [3,  'Check-called both, checked river — showdown weak'],
+    'call_xc_xc_c':   [4,  'Check-called both, called river'],
+    'call_xc_xc_r':   [8,  'Check-called both, raised river — polarized'],
+    'call_xc_xc_xc':  [4,  'Check-called all three streets — stubborn medium'],
+    'call_xc_xc_xr':  [9,  'Check-called both, check-raised river — trap'],
+    'call_xc_xc_f':   [0,  'Check-called both, folded river'],
+    'rfi_x_x_b':      [5,  'Checked both, bet river — bluff or hidden value'],
+    'rfi_x_x_x':      [1,  'Checked all three streets — very weak, pure showdown'],
+    'rfi_x_x_c':      [3,  'Checked both, called river bet — weak showdown value'],
+    'rfi_x_x_r':      [8,  'Checked both, raised river — polarized trap or bluff'],
+    'rfi_x_x_xc':     [3,  'Checked both, check-called river — weak'],
+    'rfi_x_x_xr':     [8,  'Checked both, check-raised river — disguised strong'],
+    'rfi_x_x_f':      [0,  'Checked both, folded river'],
+    'rfi_x_x_xf':     [0,  'Checked both, check-folded river'],
+    '3bet_b_b_b':     [9,  'Triple barrel in 3-bet pot — strong value'],
+    '3bet_b_b_x':     [6,  'Double barrel 3-bet pot, checked river'],
+    '3bet_b_b_c':     [8,  'Double barrel 3-bet pot, called river'],
+    '3bet_b_b_r':     [10, 'Double barrel 3-bet pot, raised river — nuts'],
+    '3bet_b_b_xc':    [7,  'Double barrel 3-bet pot, check-called river'],
+    '3bet_b_b_xr':    [10, 'Double barrel 3-bet pot, check-raised river — nuts'],
+    '3bet_b_c_b_b':   [9,  'Called 3-bet c-bet, bet turn, bet river — very strong'],
+    '3bet_b_c_b_x':   [6,  'Called 3-bet c-bet, bet turn, checked river'],
+    '3bet_b_c_b_r':   [10, 'Called 3-bet c-bet, bet turn, raised river — nuts'],
+    '3bet_b_c_b_xc':  [8,  'Called 3-bet c-bet, bet turn, check-called river'],
+    '3bet_b_c_r_b':   [10, 'Called 3-bet c-bet, raised turn, bet river — nuts'],
+    '3bet_b_c_r_x':   [8,  'Called 3-bet c-bet, raised turn, checked river'],
+    '3bet_b_c_r_c':   [9,  'Called 3-bet c-bet, raised turn, called river'],
+    'limp_xc_b_b':    [6,  'Limped, check-called flop, bet turn, bet river'],
+    'limp_xc_b_x':    [3,  'Limped, check-called flop, bet turn, checked river'],
+    'limp_xc_b_c':    [5,  'Limped, check-called flop, bet turn, called river'],
+    'limp_xc_b_r':    [8,  'Limped, check-called flop, bet turn, raised river'],
+    'limp_xc_xc_b':   [4,  'Limped, check-called both, bet river'],
+    'limp_xc_xc_x':   [2,  'Limped, check-called both, checked river — weak'],
+    'limp_xc_xc_c':   [3,  'Limped, check-called both, called river'],
+    'limp_xc_xc_r':   [7,  'Limped, check-called both, raised river'],
+    'limp_b_b_b':     [7,  'Limped, bet all three streets — medium-strong value'],
+    'limp_b_b_x':     [4,  'Limped, bet flop and turn, checked river'],
+    'limp_b_b_c':     [6,  'Limped, bet flop and turn, called river'],
+    'limp_b_b_r':     [8,  'Limped, bet flop and turn, raised river'],
+  }
+  if (RIVER[key]) {
+    const [s, d] = RIVER[key]
+    return { strength: s, description: d }
+  }
+
+  // ── FALLBACK for novel sequences ─────────────────────────────
+  const riverAction = seq[seq.length - 1]
+  const fallback = scoreSequence(seq.slice(0, -1))
+  let str = fallback.strength
+  let desc = fallback.description
+  if (riverAction === 'b' || riverAction === 'r') {
+    str = Math.min(10, str + 1); desc += ' → bet/raise'
+  } else if (riverAction === 'x') {
+    str = Math.max(1, str - 2); desc += ' → checked'
+  } else if (riverAction === 'xr') {
+    str = Math.max(str, 8); desc += ' → check-raised (polarized)'
+  } else if (riverAction === 'c' || riverAction === 'xc') {
+    desc += ' → called'
+  } else if (riverAction === 'f' || riverAction === 'xf') {
+    return { strength: 0, description: desc + ' → folded' }
+  }
+  return { strength: Math.max(0, Math.min(10, str)), description: desc }
+}
+
+function updatePrimaryVillain(engine: HandEngine): void {
+  const active = engine.villainProfiles.filter(p =>
+    p.rangeStrength > 0 &&
+    !engine.seats.find(s => s.seatIndex === p.seatIndex)?.folded
+  )
+  engine.villainProfiles.forEach(p => { p.isPrimary = false })
+  if (active.length === 0) {
+    engine.primaryVillain = null
+    return
+  }
+  const primary = active.reduce((best, p) =>
+    p.rangeStrength > best.rangeStrength ? p : best
+  , active[0])
+  primary.isPrimary = true
+  engine.primaryVillain = primary
+}
+
 function generateHeroOptions(
   heroSeat: Seat,
   board: Card[],
@@ -629,249 +924,337 @@ function generateHeroOptions(
   limpers: number,
   activeSeats?: Seat[],
   streetHistory?: Array<{ street: string; heroAction: string; pot: number }>,
+  villainRangeStrength?: number,
+  villainRangeDesc?: string,
 ): HeroOption[] {
   const bb = getBB(levelIndex)
-  const sb = getSB(levelIndex)
   const depth = getBBDepth(heroSeat.stack, levelIndex)
   const ranges = getRanges(heroSeat.position, depth)
   const nearBubble = isNearBubble(playersLeft)
-  const isNearFinalTable = playersLeft <= 27
-  const isDeepMoney = playersLeft <= 500
-  const icmPressure = isNearFinalTable ? 1.4 : nearBubble ? 1.2 : isDeepMoney ? 0.9 : 1.0
   const options: HeroOption[] = []
   const heroHandStr = heroSeat.holeCards
     ? cardToHandStr(heroSeat.holeCards[0], heroSeat.holeCards[1])
     : ''
-  const fmtChips = (n: number) => n.toLocaleString()
 
   // ── PREFLOP ──────────────────────────────────────────────
   if (street === 'preflop') {
-    const inRFI = ranges.rfi.includes(heroHandStr)
-    const inCall = ranges.vsRaiseCall.includes(heroHandStr)
-    const in3bet = ranges.threebet.includes(heroHandStr)
-    const inVs3betCall = ranges.vs3betCall.includes(heroHandStr)
-    const in4bet = ranges.fourbet.includes(heroHandStr)
+    const inRFI     = ranges.rfi.includes(heroHandStr)
+    const inCall    = ranges.vsRaiseCall.includes(heroHandStr)
+    const in3bet    = ranges.threebet.includes(heroHandStr)
+    const inVs3bet  = ranges.vs3betCall.includes(heroHandStr)
+    const in4bet    = (ranges.fourbet ?? []).includes(heroHandStr)
     const shoveRanges = depth < 20 ? getShoveRanges(heroSeat.position, depth) : null
-    const inShove = shoveRanges ? shoveRanges.shove.includes(heroHandStr) : false
-
-    // 4-bet continuation range: fourbet range + QQ+/AK as floor
-    const in4betContinue = ranges.fourbet.includes(heroHandStr) ||
-      ['AA','KK','QQ','AKs','AKo'].some(h => heroHandStr.startsWith(h.slice(0, 2)))
-
-    // Squeeze situation: one raiser + callers = dead money hero can pick up with a 3-bet
+    const inShove   = shoveRanges?.shove.includes(heroHandStr) ?? false
     const isSqueeze = raisers === 1 && limpers >= 1
-    const squeezeDeadMoney = limpers * currentBet
+    const inSqueezeRange = isSqueeze && (inCall || inRFI) &&
+      (heroHandStr.endsWith('s') || ['99','88','77','AJo','KQo'].includes(heroHandStr))
 
-    // Fold
-    const foldCallCost = currentBet > 0 ? Math.min(heroSeat.stack, Math.max(0, currentBet - heroSeat.invested)) : 0
-    const foldPotOdds = foldCallCost > 0 ? foldCallCost / (pot + foldCallCost) : 1
-    const foldQuality: Quality =
-      (raisers >= 3 && in4betContinue) ? 'bad' :
-      (raisers >= 3) ? 'best' :
-      (raisers === 2 && inVs3betCall) ? 'bad' :
-      (raisers === 2) ? 'best' :
-      (raisers === 1 && inCall) ? 'bad' :
-      (raisers === 0 && inRFI) ? 'bad' :
-      (foldCallCost > 0 && foldPotOdds < 0.15) ? 'ok' :
-      'best'
-    options.push({
-      label: 'Fold',
-      type: 'fold',
-      amount: 0,
-      chipCost: 0,
-      quality: foldQuality,
-      coaching: foldQuality === 'best'
-        ? raisers >= 3
-          ? `Correct fold. Facing a 4-bet, continue only with QQ+/AK. ${heroHandStr} is too weak to continue.`
-          : isSqueeze && (inRFI || inCall)
-          ? `Folding here gives up a squeeze opportunity. ${heroHandStr} in a squeeze spot with ${limpers} dead caller${limpers > 1 ? 's' : ''} could be a profitable 3-bet.`
-          : `Correct fold. ${heroHandStr} is outside your range here.${nearBubble ? ' With the bubble approaching, patience is even more valuable.' : isNearFinalTable ? ' Near the final table, ICM pressure is high — don\'t gamble with marginal hands.' : ' Patient folding is a tournament edge.'}`
-        : foldQuality === 'ok'
-        ? `Marginal fold. ${heroHandStr} is outside your standard range but pot odds of ${Math.round(foldPotOdds * 100)}% make calling borderline acceptable.`
-        : `Too tight. ${heroHandStr} is in your range — don't surrender equity.`,
-    })
+    // Hand properties for quality decisions
+    const RANK_ORDER = 'AKQJT98765432'.split('')
+    const c1 = heroSeat.holeCards![0]
+    const c2 = heroSeat.holeCards![1]
+    const i1 = RANK_ORDER.indexOf(c1.r)
+    const i2 = RANK_ORDER.indexOf(c2.r)
+    const hiIdx  = Math.min(i1, i2)
+    const loIdx  = Math.max(i1, i2)
+    const isPair   = c1.r === c2.r
+    const isSuited = c1.s === c2.s
+    const gap      = loIdx - hiIdx
+    const isLP  = ['BTN', 'CO', 'HJ'].includes(heroSeat.position)
+    const isOOP = ['SB', 'BB', 'UTG', 'UTG1', 'UTG2'].includes(heroSeat.position)
 
-    // SB complete when facing limpers only (no raise)
-    if (heroSeat.position === 'SB' && raisers === 0 && limpers > 0) {
-      const sbCallCost = Math.min(
-        heroSeat.stack,
-        Math.max(0, bb - heroSeat.invested)
-      )
-      if (sbCallCost > 0) {
+    // Sizing
+    const depthMult = depth > 100 ? 3.0 : depth > 75 ? 2.5 : depth > 50 ? 2.2 : 2.0
+    const oopBonus  = isOOP ? 0.3 : 0.0
+    const stdMult   = depthMult + oopBonus
+    const rfiStd        = r100(bb * stdMult)
+    const rfiLarge      = r100(bb * (stdMult + 0.5))
+    const threeBetStd   = r100(currentBet * (2.5 + limpers))
+    const threeBetLarge = r100(currentBet * (3.0 + limpers))
+    const fourBetStd    = r100(currentBet * 2.3)
+    const callCost = Math.min(heroSeat.stack, Math.max(0, currentBet - heroSeat.invested))
+    const limpCost = Math.min(heroSeat.stack, Math.max(0, bb - heroSeat.invested))
+    const threeBetCommitsStack =
+      threeBetStd > heroSeat.stack * 0.4 ||
+      (heroSeat.stack - threeBetStd) < bb * 12
+
+    // ── SCENARIO: FIRST IN ───────────────────────────────
+    if (raisers === 0 && heroSeat.position !== 'BB') {
+
+      // 1. FOLD
+      const foldQuality: Quality =
+        inRFI ? 'bad' :
+        (isSuited && gap <= 3 && isLP) ? 'ok' :
+        'best'
+      options.push({
+        label: 'Fold',
+        type: 'fold',
+        amount: 0,
+        chipCost: 0,
+        quality: foldQuality,
+        coaching: foldQuality === 'bad'
+          ? `${heroHandStr} is in your opening range from ${heroSeat.position}. Raise for value and initiative.`
+          : foldQuality === 'ok'
+          ? `${heroHandStr} is borderline. Folding is fine but a small raise is also reasonable.`
+          : `Correct fold. ${heroHandStr} is outside your range from ${heroSeat.position}.`,
+      })
+
+      // 2. LIMP (call BB)
+      if (limpCost > 0) {
+        const limpQuality: Quality =
+          (isPair && hiIdx >= 7 && isLP) ? 'ok' :
+          (isSuited && gap <= 2 && isLP) ? 'ok' :
+          'bad'
         options.push({
-          label: `Call ${sbCallCost.toLocaleString()}`,
+          label: heroSeat.position === 'SB'
+            ? `Complete ${limpCost.toLocaleString()}`
+            : `Call ${limpCost.toLocaleString()} (limp)`,
           type: 'call',
           amount: bb,
-          chipCost: sbCallCost,
-          quality: (inRFI || inCall || heroHandStr.endsWith('s')) ? 'ok' : 'bad',
-          coaching: `Completing the SB gives you good pot odds but you'll be out of position for every postflop street. Raising is usually better — take initiative and deny equity to limpers.`,
+          chipCost: limpCost,
+          quality: limpQuality,
+          coaching: limpQuality === 'ok'
+            ? `Limping ${heroHandStr} in LP is a low-frequency solver play. Raising is usually better but this is defensible.`
+            : `Limping ${heroHandStr} leaks value. Raise for initiative or fold — limping invites multiway pots where your hand plays poorly.`,
+        })
+      }
+
+      // 3. RAISE STANDARD
+      if (rfiStd < heroSeat.stack) {
+        const raiseStdQuality: Quality =
+          inRFI ? 'best' :
+          (isSuited && gap <= 3 && isLP) ? 'ok' :
+          'bad'
+        options.push({
+          label: `Raise to ${rfiStd.toLocaleString()}`,
+          type: 'raise',
+          amount: rfiStd,
+          chipCost: Math.max(0, rfiStd - heroSeat.invested),
+          quality: raiseStdQuality,
+          coaching: raiseStdQuality === 'best'
+            ? `Standard open from ${heroSeat.position}. ${heroHandStr} is in range — raise and take initiative.`
+            : raiseStdQuality === 'ok'
+            ? `Marginal open. ${heroHandStr} has some playability from ${heroSeat.position} but is borderline.`
+            : `Do not open ${heroHandStr} from ${heroSeat.position}. This hand is outside your range.`,
+        })
+      }
+
+      // 4. RAISE LARGE (depth ≥ 20) or SHOVE (depth < 20)
+      if (depth > 50 && rfiLarge < heroSeat.stack && rfiLarge !== rfiStd) {
+        options.push({
+          label: `Raise to ${rfiLarge.toLocaleString()} (large)`,
+          type: 'raise',
+          amount: rfiLarge,
+          chipCost: Math.max(0, rfiLarge - heroSeat.invested),
+          quality: inRFI ? 'good' : 'bad',
+          coaching: inRFI
+            ? `Larger sizing builds a bigger pot. Fine with strong hands but standard sizing is preferred for balance.`
+            : `Raising large with ${heroHandStr} outside your range compounds the mistake.`,
+        })
+      } else if (depth < 20) {
+        // Short stack: shove replaces Raise Large as option 4
+        options.push({
+          label: `Shove ${heroSeat.stack.toLocaleString()}`,
+          type: 'shove',
+          amount: heroSeat.stack,
+          chipCost: heroSeat.stack,
+          quality: inShove ? 'best' : inRFI ? 'ok' : 'bad',
+          coaching: inShove
+            ? `Standard shove at ${depth}BB. ${heroHandStr} has enough equity and fold equity to be profitable.`
+            : inRFI
+            ? `${heroHandStr} is in your opening range but too deep for an immediate shove. Consider a standard open if stack allows.`
+            : `Do not shove ${heroHandStr} here — it's outside your shove range at ${depth}BB.`,
         })
       }
     }
 
-    // Check option for BB when no raise
-    if (heroSeat.position === 'BB' && raisers === 0 && currentBet <= bb) {
+    // ── SCENARIO: BB CHECK or RAISE ─────────────────────
+    else if (heroSeat.position === 'BB' && raisers === 0) {
       options.push({
-        label: 'Check — take free flop',
+        label: limpers > 0 ? 'Check (iso opportunity)' : 'Check — take free flop',
         type: 'check',
         amount: 0,
         chipCost: 0,
-        quality: inRFI ? 'ok' : 'good',
-        coaching: `BB gets a free look. ${heroHandStr} can see the flop for free — check and evaluate postflop.`,
+        quality: inRFI ? 'ok' : 'best',
+        coaching: inRFI
+          ? `You can check or raise here. ${heroHandStr} is strong enough to iso-raise the limpers.`
+          : `Check and see a free flop with ${heroHandStr}.`,
       })
-    }
-
-    // Limp (early levels only, when no raise yet)
-    if (levelIndex < 8 && raisers === 0 && currentBet === bb) {
-      options.push({
-        label: `Limp ${bb.toLocaleString()}`,
-        type: 'limp',
-        amount: bb,
-        chipCost: bb,
-        quality: 'ok',
-        coaching: `Limping is acceptable in early levels. Be aware of your postflop position and stack depth.`,
-      })
-    }
-
-    // Call / overcall limpers
-    if (currentBet > 0 && (raisers >= 1 || limpers >= 1)) {
-      const callCost = Math.min(heroSeat.stack, Math.max(0, currentBet - heroSeat.invested))
-      const isCallAllIn = callCost >= heroSeat.stack
-      const leavingBehindBB = bb > 0 ? (heroSeat.stack - callCost) / bb : 0
-      const callLeavesTooShort = raisers >= 1 && leavingBehindBB < 10 && !isCallAllIn
-      const impliedPot = pot + callCost
-      const callPotOdds = impliedPot > 0 ? callCost / impliedPot : 1
-
-      const activePlayers = activeSeats?.length ?? 0
-      const callQuality: Quality =
-        callLeavesTooShort ? 'bad' :
-        (raisers >= 3 && in4betContinue) ? 'ok' :
-        (raisers >= 3) ? 'bad' :
-        (raisers === 2 && activePlayers > 3 && inVs3betCall) ? 'ok' :
-        (raisers === 2 && activePlayers > 3) ? 'bad' :
-        (raisers === 2 && inVs3betCall) ? 'best' :
-        (raisers === 2) ? 'bad' :
-        (raisers === 1 && inCall && in3bet) ? 'good' :
-        (raisers === 1 && inCall) ? 'best' :
-        (raisers === 1 && in3bet) ? 'ok' :
-        (callPotOdds < 0.15 && (inRFI || in3bet || heroHandStr.endsWith('s'))) ? 'good' :
-        (callPotOdds < 0.20 && inRFI) ? 'ok' :
-        'bad'
-      options.push({
-        label: isCallAllIn ? `Call All-In ${callCost.toLocaleString()}` : `Call ${currentBet.toLocaleString()}`,
-        type: isCallAllIn ? 'shove' : 'call',
-        amount: currentBet,
-        chipCost: callCost,
-        quality: callQuality,
-        coaching: callQuality === 'best'
-          ? `Good call. ${heroHandStr} is in your calling range. Pot odds: ${Math.round(callPotOdds * 100)}% — well within equity threshold.`
-          : (callQuality === 'good' && in3bet)
-          ? `Calling is fine but 3-betting is better. ${heroHandStr} is in your 3-bet range — build the pot and deny equity to the field.`
-          : callQuality === 'good'
-          ? `Reasonable call. ${heroHandStr} has implied odds — ${Math.round(callPotOdds * 100)}% pot odds with good postflop playability.`
-          : callQuality === 'ok'
-          ? `Marginal call. ${heroHandStr} at ${Math.round(callPotOdds * 100)}% pot odds — consider 3-betting for fold equity instead.${nearBubble ? ' On the bubble, avoid marginal calls that could cripple your stack.' : ''}`
-          : callLeavesTooShort
-          ? `Calling here leaves only ${Math.round(leavingBehindBB)}BB behind — a stack too short to play postflop effectively.${nearBubble ? ' On the bubble especially, never call yourself into a crippled stack. Shove or fold.' : ' Shove for maximum pressure or fold. Never call and leave yourself crippled.'}`
-          : `Calling ${heroHandStr} here leaks chips. ${Math.round(callPotOdds * 100)}% pot odds but the hand lacks equity vs this range. Fold or raise.`,
-      })
-    }
-
-    // Open raise / 3-bet / 4-bet
-    let threeBetCommitsStack = false
-    if (depth >= 20) {
-      if (raisers === 0) {
-        // Open raise
-        const openSize = getOpenSize(levelIndex, heroSeat.stack,
-          heroSeat.position === 'BTN' || heroSeat.position === 'CO')
-        // openSize already comes from getOpenSize — ensure rounded to 100
-        const openSizeRounded = Math.round(openSize / 100) * 100
-        const raiseQuality: Quality = inRFI ? 'best' : 'bad'
+      if (limpers > 0) {
+        const isoStd   = r100(rfiStd + limpers * r100(bb * 0.5))
+        const isoLarge = r100(isoStd + bb)
         options.push({
-          label: `Raise to ${openSizeRounded.toLocaleString()}`,
+          label: `Raise to ${isoStd.toLocaleString()}`,
           type: 'raise',
-          amount: openSizeRounded,
-          chipCost: openSizeRounded,
-          quality: raiseQuality,
-          coaching: raiseQuality === 'best'
-            ? `Standard. ${heroHandStr} from ${heroSeat.position} — raise and take initiative.`
-            : `Weak open. ${heroHandStr} is outside your RFI range from ${heroSeat.position}. Fold.`,
+          amount: isoStd,
+          chipCost: Math.max(0, isoStd - heroSeat.invested),
+          quality: inRFI ? 'best' : 'bad',
+          coaching: inRFI
+            ? `Iso-raise to deny equity to limpers. ${heroHandStr} plays well heads-up.`
+            : `Raising ${heroHandStr} from BB over limpers is too loose. Check and see the flop.`,
         })
-      } else if (raisers === 1) {
-        // 3-bet
-        const depth = getBBDepth(heroSeat.stack, levelIndex)
-        // 3-bet sizing: 2.5x the raise + 1 raise unit per caller
-        // Formula: currentBet × (2.5 + callers)
-        // Correctly prices out implied odds hands and accounts for dead money
-        const callerCount = limpers  // limpers = players who called the raise
-        const rawThreeBet = Math.round(currentBet * (2.5 + callerCount) / 100) * 100
-        const threeBetSize = rawThreeBet
-        threeBetCommitsStack = rawThreeBet > heroSeat.stack * 0.4 ||
-          (heroSeat.stack - rawThreeBet) < getBB(levelIndex) * 12
-        const inSqueezeRange = isSqueeze && (inCall || inRFI) &&
-          (heroHandStr.endsWith('s') ||
-           ['99','88','77','AJo','KQo'].includes(heroHandStr))
-        const threeBetQuality: Quality = in3bet ? 'best' :
-          inSqueezeRange ? 'good' :
-          'bad'
-        if (!threeBetCommitsStack) {
-          options.push({
-            label: `3-bet to ${threeBetSize.toLocaleString()}`,
-            type: 'raise',
-            amount: threeBetSize,
-            chipCost: threeBetSize,
-            quality: threeBetQuality,
-            coaching: threeBetQuality === 'best'
-              ? isSqueeze
-                ? `Squeeze play with ${heroHandStr}. There's ${fmtChips(squeezeDeadMoney)} in dead money — 3-bet to pick it up. Callers are in a terrible spot.`
-                : `Correct 3-bet. ${heroHandStr} is in your 3-bet range — build the pot and apply pressure.`
-              : threeBetQuality === 'good'
-              ? `Good squeeze spot. ${heroHandStr} is not in your standard 3-bet range but the dead money from ${limpers} caller${limpers > 1 ? 's' : ''} makes this a profitable squeeze.`
-              : `Don't 3-bet ${heroHandStr} here. It's in your calling range, not your 3-bet range. Call if the odds are right, otherwise fold.`,
-          })
-        }
-      } else if (raisers >= 2) {
-        // 4-bet
-        const fourBetSize = Math.round(currentBet * 2.5 / 100) * 100
-        const fourBetQuality: Quality = in4bet ? 'best' : 'bad'
         options.push({
-          label: `4-bet to ${fourBetSize.toLocaleString()}`,
+          label: `Raise to ${isoLarge.toLocaleString()} (large)`,
           type: 'raise',
-          amount: fourBetSize,
-          chipCost: fourBetSize,
-          quality: fourBetQuality,
-          coaching: fourBetQuality === 'best'
-            ? `Correct 4-bet. ${heroHandStr} is premium enough to go for it.`
-            : `4-betting ${heroHandStr} here is a bluff with no blocker value. Fold.`,
+          amount: isoLarge,
+          chipCost: Math.max(0, isoLarge - heroSeat.invested),
+          quality: inRFI ? 'good' : 'bad',
+          coaching: `Larger iso-raise charges limpers more. Use with premium hands.`,
         })
       }
     }
 
-    // Shove
-    if (depth < 20 || threeBetCommitsStack) {
-      const shoveQuality: Quality =
-        (raisers >= 3 && in4betContinue) ? 'best' :
-        (raisers >= 3) ? 'bad' :
-        (raisers >= 1 && threeBetCommitsStack && in4betContinue) ? 'best' :
-        (raisers >= 1 && threeBetCommitsStack) ? 'ok' :
-        inShove ? 'best' :
-        (depth < 15) ? 'ok' :
-        'bad'
+    // ── SCENARIO: FACING A RAISE ─────────────────────────
+    else if (raisers === 1) {
+      // 1. FOLD
+      options.push({
+        label: 'Fold',
+        type: 'fold',
+        amount: 0,
+        chipCost: 0,
+        quality: (inCall || in3bet) ? 'bad' : 'best',
+        coaching: (inCall || in3bet)
+          ? `${heroHandStr} is in your continuing range. Don't fold — call or 3-bet.`
+          : `Correct fold. ${heroHandStr} doesn't have enough equity vs this range.`,
+      })
+
+      // 2. CALL
+      if (callCost > 0 && callCost < heroSeat.stack) {
+        options.push({
+          label: `Call ${currentBet.toLocaleString()}`,
+          type: 'call',
+          amount: currentBet,
+          chipCost: callCost,
+          quality: (inCall && in3bet) ? 'good' : inCall ? 'best' : 'bad',
+          coaching: (inCall && in3bet)
+            ? `Calling is fine but 3-betting is slightly better. ${heroHandStr} is in your 3-bet range.`
+            : inCall
+            ? `Good call. ${heroHandStr} is in your calling range.`
+            : `Calling ${heroHandStr} here leaks chips. Fold or 3-bet.`,
+        })
+      }
+
+      // 3. 3-BET STANDARD
+      if (!threeBetCommitsStack && threeBetStd < heroSeat.stack) {
+        options.push({
+          label: `3-bet to ${threeBetStd.toLocaleString()}`,
+          type: 'raise',
+          amount: threeBetStd,
+          chipCost: threeBetStd,
+          quality: in3bet ? 'best' : inSqueezeRange ? 'good' : 'bad',
+          coaching: in3bet
+            ? isSqueeze
+              ? `Squeeze play with ${heroHandStr}. Dead money makes this profitable — 3-bet and pick it up.`
+              : `Correct 3-bet. ${heroHandStr} is in your 3-bet range — apply pressure.`
+            : inSqueezeRange
+            ? `Good squeeze. Dead money from ${limpers} caller${limpers > 1 ? 's' : ''} makes this profitable.`
+            : `Don't 3-bet ${heroHandStr}. It's not in your 3-bet range — call or fold.`,
+        })
+      }
+
+      // 4. 3-BET LARGE
+      if (!threeBetCommitsStack && threeBetLarge < heroSeat.stack && threeBetLarge !== threeBetStd) {
+        options.push({
+          label: `3-bet to ${threeBetLarge.toLocaleString()} (large)`,
+          type: 'raise',
+          amount: threeBetLarge,
+          chipCost: threeBetLarge,
+          quality: in3bet ? 'good' : 'bad',
+          coaching: `Larger 3-bet sizing. More pressure but standard size is preferred for balance.`,
+        })
+      }
+
+      // SHOVE when short or 3-bet commits stack
+      if (depth < 20 || threeBetCommitsStack) {
+        options.push({
+          label: `Shove ${heroSeat.stack.toLocaleString()}`,
+          type: 'shove',
+          amount: heroSeat.stack,
+          chipCost: heroSeat.stack,
+          quality: in3bet ? 'best' : inCall ? 'ok' : 'bad',
+          coaching: in3bet
+            ? `Correct shove. ${heroHandStr} at ${depth}BB — maximum fold equity plus hand equity.`
+            : inCall
+            ? `Marginal shove. ${heroHandStr} has some equity but may be dominated.`
+            : `Do not shove ${heroHandStr} here. Too weak to get it in vs this range.`,
+        })
+      }
+    }
+
+    // ── SCENARIO: FACING A 3-BET ─────────────────────────
+    else if (raisers === 2) {
+      // 1. FOLD
+      options.push({
+        label: 'Fold',
+        type: 'fold',
+        amount: 0,
+        chipCost: 0,
+        quality: (inVs3bet || in4bet) ? 'bad' : 'best',
+        coaching: (inVs3bet || in4bet)
+          ? `${heroHandStr} is strong enough to continue vs a 3-bet. Don't fold.`
+          : `Correct fold. ${heroHandStr} is not strong enough to continue vs a 3-bet.`,
+      })
+
+      // 2. CALL
+      if (callCost > 0 && callCost < heroSeat.stack) {
+        options.push({
+          label: `Call ${currentBet.toLocaleString()}`,
+          type: 'call',
+          amount: currentBet,
+          chipCost: callCost,
+          quality: inVs3bet ? 'best' : 'bad',
+          coaching: inVs3bet
+            ? `${heroHandStr} is in your vs-3bet calling range. Good call.`
+            : `Calling ${heroHandStr} vs a 3-bet leaks chips. Fold.`,
+        })
+      }
+
+      // 3. 4-BET STANDARD
+      if (in4bet && fourBetStd < heroSeat.stack * 0.8) {
+        options.push({
+          label: `4-bet to ${fourBetStd.toLocaleString()}`,
+          type: 'raise',
+          amount: fourBetStd,
+          chipCost: fourBetStd,
+          quality: 'best',
+          coaching: `4-bet with ${heroHandStr}. Applies maximum pressure.`,
+        })
+      }
+
+      // 4. SHOVE
       options.push({
         label: `Shove ${heroSeat.stack.toLocaleString()}`,
         type: 'shove',
         amount: heroSeat.stack,
         chipCost: heroSeat.stack,
-        quality: shoveQuality,
-        coaching: shoveQuality === 'best'
-          ? raisers >= 3
-            ? `Mandatory shove. Facing a 4-bet with ${heroHandStr} — this is a get-it-in spot. Never fold a premium here.`
-            : `Correct shove. ${heroHandStr} at ${depth}BB — maximum pressure.${nearBubble ? ' Note: near the bubble, be sure villain has enough equity to call before shoving.' : ''}`
-          : shoveQuality === 'ok'
-          ? `Marginal shove. ${heroHandStr} has some equity but may be dominated. Consider folding.`
-          : raisers >= 3
-          ? `Correct fold. ${heroHandStr} is not strong enough to continue vs a 4-bet.`
-          : `Too deep to shove ${heroHandStr}. Raise smaller or fold.`,
+        quality: in4bet ? (depth < 25 ? 'best' : 'good') : inVs3bet ? 'ok' : 'bad',
+        coaching: in4bet
+          ? `Shoving ${heroHandStr} facing a 3-bet. Maximum pressure.`
+          : `Shoving ${heroHandStr} is too aggressive here. 4-bet smaller or call.`,
+      })
+    }
+
+    // ── SCENARIO: FACING 4-BET+ ──────────────────────────
+    else if (raisers >= 3) {
+      options.push({
+        label: 'Fold',
+        type: 'fold',
+        amount: 0,
+        chipCost: 0,
+        quality: in4bet ? 'bad' : 'best',
+        coaching: in4bet
+          ? `${heroHandStr} is strong enough to shove vs a 4-bet.`
+          : `Correct fold. Only continue with QQ+/AK vs a 4-bet.`,
+      })
+      options.push({
+        label: `Shove ${heroSeat.stack.toLocaleString()}`,
+        type: 'shove',
+        amount: heroSeat.stack,
+        chipCost: heroSeat.stack,
+        quality: in4bet ? 'best' : 'bad',
+        coaching: in4bet
+          ? `Mandatory shove with ${heroHandStr}. Never fold a premium facing a 4-bet.`
+          : `Shoving ${heroHandStr} vs a 4-bet is too loose. Fold.`,
       })
     }
 
@@ -884,6 +1267,7 @@ function generateHeroOptions(
     : null
 
   const texture = board.length >= 3 ? classifyBoardTexture(board) : 'dry'
+  const isDry = texture === 'dry'
   const texStrat = BOARD_TEXTURE[texture]
   const nearBubbleNote = nearBubble ? ' ICM pressure: avoid marginal spots.' : ''
 
@@ -914,6 +1298,19 @@ function generateHeroOptions(
     lastAggressor.seatIndex !== heroSeat.seatIndex &&
     !isIP && currentBet === 0 &&
     !heroRaisedPreflop
+
+  // Villain range tiers derived from tracking
+  const vs = villainRangeStrength ?? 5
+  const villainStrong = vs >= 8
+  const villainWeak   = vs < 5
+  const villainRaisedLastStreet = !!(villainRangeDesc && (
+    villainRangeDesc.includes('raised') ||
+    villainRangeDesc.includes('check-raised') ||
+    villainRangeDesc.includes('raised turn') ||
+    villainRangeDesc.includes('raised flop')
+  ))
+  const villainContext = villainRangeDesc && villainRangeDesc !== 'Preflop range unknown'
+    ? ` Villain's line: ${villainRangeDesc}.` : ''
 
   // True when hero has an overpair but the board has a higher card
   const boardHasDangerCard = hs !== null &&
@@ -952,7 +1349,13 @@ function generateHeroOptions(
     })
 
     // Call (potOdds already defined above)
-    const callQuality: Quality = hs && hs.str >= 2 ? 'best' :
+    const callQuality: Quality =
+      villainStrong && hs && hs.str >= 3 ? 'best' :
+      villainStrong && hs && hs.str === 2 ? 'good' :
+      villainStrong && hs && hs.str <= 1 ? 'bad' :
+      villainWeak && hs && hs.str >= 1 ? 'best' :
+      villainWeak && hs && (hs.heroFD || hs.oesd) ? 'good' :
+      hs && hs.str >= 2 ? 'best' :
       hs && (hs.heroFD || hs.oesd) && potOdds < 0.33 ? 'best' :
       hs && hs.str === 1 && hs.pairPos === 'toppair' ? 'best' :
       hs && hs.str === 1 ? 'ok' : 'bad'
@@ -965,10 +1368,10 @@ function generateHeroOptions(
       chipCost: pfCallCost,
       quality: callQuality,
       coaching: callQuality === 'best'
-        ? `Good call. ${hs?.label || 'Your hand'} has the equity to continue.`
+        ? `Good call. ${hs?.label || 'Your hand'} has the equity to continue.${villainContext}`
         : callQuality === 'ok'
-        ? `Marginal call. You're getting reasonable odds but the hand is weak.`
-        : `Calling here with ${hs?.label || 'this hand'} is a chip leak. Fold or raise.`,
+        ? `Marginal call. You're getting reasonable odds but the hand is weak.${villainContext}`
+        : `Calling here with ${hs?.label || 'this hand'} is a chip leak. Fold or raise.${villainContext}`,
     })
 
     // Raise / Re-raise
@@ -1025,11 +1428,15 @@ function generateHeroOptions(
                       activePlayers === 3 ? 1.10 : 1.0
   // Check
   const checkQuality: Quality =
+    villainRaisedLastStreet ? 'best' :
+    (villainStrong && hs && hs.str < 3) ? 'best' :
+    (villainStrong && hs && hs.str >= 5) ? 'ok' :
     (heroDonking && hs && hs.str < 2 && !hs.heroFD && !hs.oesd) ? 'best' :
     (hs && hs.str === 0 && !hs.heroFD && !hs.oesd) ? 'best' :
-    (hs && hs.str >= 2 && street === 'river') ? 'bad' :
+    (hs && hs.str >= 2 && street === 'river' && !villainRaisedLastStreet && !villainStrong) ? 'bad' :
     (activePlayers >= 4 && hs && hs.str === 1 &&
-      hs.pairPos !== 'toppair' && hs.pairPos !== 'overpair') ? 'best' :
+      hs.pairPos !== 'toppair' && hs.pairPos !== 'overpair') ? 'good' :
+    (villainWeak && hs && hs.str >= 1) ? 'ok' :
     'ok'
   options.push({
     label: 'Check',
@@ -1038,14 +1445,16 @@ function generateHeroOptions(
     chipCost: 0,
     quality: checkQuality,
     coaching: checkQuality === 'best'
-      ? (heroDonking && hs && hs.str < 2
+      ? (villainRaisedLastStreet
+        ? `Check and re-evaluate — villain showed aggression last street.${villainContext}`
+        : heroDonking && hs && hs.str < 2
         ? `Check here — don't donk bet weak hands into the preflop raiser. Let them c-bet and react with your hand strength.`
         : `High card has little equity. Check and see a free card.`)
       : checkQuality === 'bad'
-      ? `Never slowplay ${hs?.label ?? 'this hand'} on the river. Bet for value — checking gives free showdowns.`
+      ? `Never slowplay ${hs?.label ?? 'this hand'} on the river. Bet for value — checking gives free showdowns.${villainContext}`
       : heroDonking
       ? `Checking is preferred OOP. You can lead the river when you have a clear value hand.`
-      : `Checking is fine for pot control.${nearBubble ? ' Near the bubble, pot control is especially important — don\'t inflate pots without strong hands.' : ' Be ready to call a reasonable bet.'}${priorBetDesc}`,
+      : `Checking is fine for pot control.${nearBubble ? ' Near the bubble, pot control is especially important.' : ' Be ready to call a reasonable bet.'}${priorBetDesc}${villainContext}`,
   })
 
   // Turn and river bets scale up: narrower range = larger sizing
@@ -1066,20 +1475,44 @@ function generateHeroOptions(
 
   const betQuality = (hs: HandResult | null, sizing: 'sm' | 'med' | 'lg'): Quality => {
     if (!hs) return 'ok'
+    if (villainStrong) {
+      if (hs.str >= 5) return 'best'
+      if (hs.str === 4) return 'best'
+      if (hs.str === 3) return 'good'
+      if (hs.str === 2) return 'ok'
+      return 'bad'
+    }
+    if (villainWeak) {
+      if (hs.str >= 2) return 'best'
+      if (hs.str === 1) return 'good'
+      if (hs.str === 0 && heroRaisedPreflop && isDry) return 'ok'
+      if (hs.str === 0 && (hs.heroFD || hs.oesd)) return 'ok'
+      if (hs.str === 0) return 'ok'
+      return 'bad'
+    }
+    // Medium villain — standard logic
     if (heroDonking) {
       if (hs.str >= 3) return 'good'
       if (hs.str === 2) return 'ok'
       if (hs.heroFD && hs.oesd) return 'ok'
       return 'bad'
     }
+    if (villainRaisedLastStreet) {
+      if (hs.str >= 4) return 'good'
+      if (hs.str === 3) return 'ok'
+      return 'bad'
+    }
     if (hs.str >= 5) return 'best'
     if (hs.str === 4) return sizing === 'sm' ? 'good' : 'best'
     if (hs.str === 3) return sizing === 'lg' ? 'ok' : 'best'
     if (hs.str === 2) return sizing === 'med' ? 'best' : 'good'
-    if (hs.str === 1 && hs.pairPos === 'toppair') return sizing === 'sm' ? 'best' : sizing === 'med' ? 'good' : 'ok'
+    if (hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')) {
+      return 'best'
+    }
     if (hs.str === 1) return sizing === 'sm' ? 'ok' : 'bad'
-    if (hs.str === 0) return street === 'river' ? 'bad' : 'ok'
-    return 'ok'
+    if (hs.str === 0 && heroRaisedPreflop && isDry && (hs.overcards ?? 0) >= 1) return 'ok'
+    if (hs.str === 0 && (hs.heroFD || hs.oesd)) return sizing === 'sm' ? 'ok' : 'bad'
+    return 'bad'
   }
 
   if (!skipBetSm) {
@@ -1091,7 +1524,7 @@ function generateHeroOptions(
       quality: betQuality(hs, 'sm'),
       coaching: heroDonking && betQuality(hs, 'sm') === 'bad'
         ? `Avoid donk betting ${hs?.label ?? 'this hand'} into the preflop raiser. Check and let them bet — you can check-raise strong hands or check-call with draws.`
-        : `Small bet on ${texStrat.label} board. ${texStrat.note}`,
+        : `Small bet on ${texStrat.label} board. ${texStrat.note}${villainContext}`,
     })
   }
 
@@ -1102,7 +1535,7 @@ function generateHeroOptions(
       amount: betMed,
       chipCost: betMed,
       quality: betQuality(hs, 'med'),
-      coaching: `Standard sizing. ${texStrat.note}${nearBubbleNote}`,
+      coaching: `Standard sizing. ${texStrat.note}${nearBubbleNote}${villainContext}`,
     })
   }
 
@@ -1113,7 +1546,7 @@ function generateHeroOptions(
       amount: betLg,
       chipCost: betLg,
       quality: betQuality(hs, 'lg'),
-      coaching: `Large bet. Use this with strong hands that want to build the pot or strong draws charging a price.`,
+      coaching: `Large bet. Use this with strong hands that want to build the pot or strong draws charging a price.${villainContext}`,
     })
   }
 
@@ -1188,6 +1621,10 @@ export interface HandEngine {
   pendingAdvance:    boolean
   pendingStreetDesc: string
 
+  // Villain tracking
+  villainProfiles:  VillainProfile[]
+  primaryVillain:   VillainProfile | null
+
   // Terminal state
   isOver:         boolean
   heroWon:        boolean
@@ -1244,11 +1681,25 @@ export function createHand(
     currentDecision: null,
     pendingAdvance: false,
     pendingStreetDesc: '',
+    villainProfiles: [],
+    primaryVillain: null,
     isOver: false,
     heroWon: false,
     isTie: false,
     showdownSeat: null,
   }
+
+  // Initialize villain profiles for all non-hero seats
+  engine.villainProfiles = updatedSeats
+    .filter(s => s.seatIndex !== heroSeatIndex)
+    .map(s => ({
+      seatIndex:      s.seatIndex,
+      position:       s.position,
+      actionSequence: [],
+      rangeStrength:  5,
+      rangeNarrow:    'Preflop range unknown',
+      isPrimary:      false,
+    }))
 
   // Deal all villain hands upfront from shuffled remaining deck
   for (const seat of updatedSeats) {
@@ -1292,10 +1743,17 @@ function runPreflopToHero(
       seat, levelIndex, currentBet, engine.pot, limpers, raisers, bb
     )
 
+    const pProfile = engine.villainProfiles.find(p => p.seatIndex === seat.seatIndex)
     if (result.action.type === 'fold') {
       seat.folded = true
       engine.activeSeats = engine.activeSeats.filter(s => s.seatIndex !== seat.seatIndex)
       actionLines.push(result.desc)
+      if (pProfile) {
+        pProfile.actionSequence = ['fold']
+        const sc = scoreSequence(pProfile.actionSequence)
+        pProfile.rangeStrength = sc.strength
+        pProfile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'limp') {
       const cost = bb - seat.invested
       seat.stack -= cost
@@ -1303,6 +1761,12 @@ function runPreflopToHero(
       engine.pot += cost
       limpers++
       actionLines.push(result.desc)
+      if (pProfile) {
+        pProfile.actionSequence = ['limp']
+        const sc = scoreSequence(pProfile.actionSequence)
+        pProfile.rangeStrength = sc.strength
+        pProfile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'raise' || result.action.type === 'shove') {
       const amount = result.action.amount
       const cost = amount - seat.invested
@@ -1313,6 +1777,14 @@ function runPreflopToHero(
       raisers++
       lastAggressorSeat = seat
       actionLines.push(result.desc)
+      if (pProfile) {
+        const pfCode = result.action.type === 'shove' ? 'shove' :
+          raisers === 1 ? 'rfi' : raisers === 2 ? '3bet' : '4bet'
+        pProfile.actionSequence = [pfCode]
+        const sc = scoreSequence(pProfile.actionSequence)
+        pProfile.rangeStrength = sc.strength
+        pProfile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'call') {
       const cost = currentBet - seat.invested
       seat.stack -= cost
@@ -1320,8 +1792,15 @@ function runPreflopToHero(
       engine.pot += cost
       limpers++
       actionLines.push(result.desc)
+      if (pProfile) {
+        pProfile.actionSequence = [raisers > 0 ? 'call' : 'limp']
+        const sc = scoreSequence(pProfile.actionSequence)
+        pProfile.rangeStrength = sc.strength
+        pProfile.rangeNarrow   = sc.description
+      }
     }
   }
+  updatePrimaryVillain(engine)
 
   // Continue action after hero (BB, or remaining players if hero is early)
   // This is simplified — remaining villains after hero will be resolved in processHeroAction
@@ -1364,6 +1843,8 @@ function runPreflopToHero(
       limpers,
       engine.activeSeats,
       [],
+      engine.primaryVillain?.rangeStrength,
+      engine.primaryVillain?.rangeNarrow,
     ),
     activePlayers: engine.activeSeats.length,
     lastAggressor: lastAggressorSeat,
@@ -1460,10 +1941,19 @@ export function processHeroAction(
       )
     }
 
+    const vprofile = engine.villainProfiles.find(p => p.seatIndex === seat.seatIndex)
     if (result.action.type === 'fold') {
       seat.folded = true
       engine.activeSeats = engine.activeSeats.filter(s => s.seatIndex !== seat.seatIndex)
       actionLines.push(result.desc)
+      if (vprofile) {
+        const prevLast = vprofile.actionSequence[vprofile.actionSequence.length - 1]
+        const foldCode = prevLast === 'x' ? 'xf' : 'f'
+        vprofile.actionSequence.push(foldCode)
+        const sc = scoreSequence(vprofile.actionSequence)
+        vprofile.rangeStrength = sc.strength
+        vprofile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'call' || result.action.type === 'limp') {
       const callCost = Math.min(seat.stack, currentBet - seat.invested)
       seat.stack -= callCost
@@ -1471,6 +1961,18 @@ export function processHeroAction(
       engine.pot += callCost
       if (seat.stack === 0) seat.allIn = true
       actionLines.push(result.desc)
+      if (vprofile) {
+        if (engine.street === 'preflop') {
+          vprofile.actionSequence = [raisedAfterHero ? 'call' : 'limp']
+        } else {
+          const last = vprofile.actionSequence[vprofile.actionSequence.length - 1]
+          if (last === 'x') vprofile.actionSequence[vprofile.actionSequence.length - 1] = 'xc'
+          else vprofile.actionSequence.push('c')
+        }
+        const sc = scoreSequence(vprofile.actionSequence)
+        vprofile.rangeStrength = sc.strength
+        vprofile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'raise' || result.action.type === 'shove') {
       const raiseAmt = result.action.amount
       const raiseCost = raiseAmt - seat.invested
@@ -1482,10 +1984,30 @@ export function processHeroAction(
       raisedAfterHero = true
       if (result.action.type === 'shove') seat.allIn = true
       actionLines.push(result.desc)
+      if (vprofile) {
+        if (engine.street === 'preflop') {
+          const heroIsRaiser = heroOption.type === 'raise' || heroOption.type === 'shove'
+          vprofile.actionSequence = [heroIsRaiser ? '3bet' : 'rfi']
+        } else {
+          const last = vprofile.actionSequence[vprofile.actionSequence.length - 1]
+          if (last === 'x') vprofile.actionSequence[vprofile.actionSequence.length - 1] = 'xr'
+          else vprofile.actionSequence.push('r')
+        }
+        const sc = scoreSequence(vprofile.actionSequence)
+        vprofile.rangeStrength = sc.strength
+        vprofile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'check') {
       actionLines.push(result.desc)
+      if (vprofile && engine.street !== 'preflop') {
+        vprofile.actionSequence.push('x')
+        const sc = scoreSequence(vprofile.actionSequence)
+        vprofile.rangeStrength = sc.strength
+        vprofile.rangeNarrow   = sc.description
+      }
     }
   }
+  updatePrimaryVillain(engine)
 
   // Villain re-raised — hero must act again on same street
   if (raisedAfterHero && lastAggressorSeat) {
@@ -1505,6 +2027,8 @@ export function processHeroAction(
         1, 0,
         engine.activeSeats,
         engine.handLog.map(l => ({ street: l.street, heroAction: l.heroAction.label, pot: l.pot })),
+        engine.primaryVillain?.rangeStrength,
+        engine.primaryVillain?.rangeNarrow,
       ),
       activePlayers: engine.activeSeats.filter(s => !s.folded).length,
       lastAggressor: lastAggressorSeat,
@@ -1514,6 +2038,7 @@ export function processHeroAction(
   // Only one player remains — hand over
   const stillIn = engine.activeSeats.filter(s => !s.folded)
   if (stillIn.length === 1) {
+    engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
     engine.isOver = true
     engine.heroWon = stillIn[0].seatIndex === heroSeat.seatIndex
     if (!engine.heroWon) engine.showdownSeat = stillIn[0]
@@ -1669,12 +2194,26 @@ function advanceStreet(
       currentBet, engine.street, levelIndex, false
     )
 
+    const avprofile = engine.villainProfiles.find(p => p.seatIndex === seat.seatIndex)
     if (result.action.type === 'fold') {
       seat.folded = true
       engine.activeSeats = engine.activeSeats.filter(s => s.seatIndex !== seat.seatIndex)
       actionLines.push(result.desc)
+      if (avprofile) {
+        const prevLast = avprofile.actionSequence[avprofile.actionSequence.length - 1]
+        avprofile.actionSequence.push(prevLast === 'x' ? 'xf' : 'f')
+        const sc = scoreSequence(avprofile.actionSequence)
+        avprofile.rangeStrength = sc.strength
+        avprofile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'check') {
       actionLines.push(result.desc)
+      if (avprofile) {
+        avprofile.actionSequence.push('x')
+        const sc = scoreSequence(avprofile.actionSequence)
+        avprofile.rangeStrength = sc.strength
+        avprofile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'raise') {
       const betCost = result.action.amount
       seat.stack -= betCost
@@ -1683,14 +2222,27 @@ function advanceStreet(
       currentBet = betCost
       lastAggressorSeat = seat
       actionLines.push(result.desc)
+      if (avprofile) {
+        avprofile.actionSequence.push('b')
+        const sc = scoreSequence(avprofile.actionSequence)
+        avprofile.rangeStrength = sc.strength
+        avprofile.rangeNarrow   = sc.description
+      }
     } else if (result.action.type === 'call') {
       const callCost = result.action.amount
       seat.stack -= callCost
       seat.invested += callCost
       engine.pot += callCost
       actionLines.push(result.desc)
+      if (avprofile) {
+        avprofile.actionSequence.push('c')
+        const sc = scoreSequence(avprofile.actionSequence)
+        avprofile.rangeStrength = sc.strength
+        avprofile.rangeNarrow   = sc.description
+      }
     }
   }
+  updatePrimaryVillain(engine)
 
   // Check if everyone folded before hero
   const stillActive = engine.activeSeats.filter(s => !s.folded)
@@ -1732,6 +2284,8 @@ function advanceStreet(
       0,
       engine.activeSeats,
       engine.handLog.map(l => ({ street: l.street, heroAction: l.heroAction.label, pot: l.pot })),
+      engine.primaryVillain?.rangeStrength,
+      engine.primaryVillain?.rangeNarrow,
     ),
     activePlayers: stillActive.length,
     lastAggressor: lastAggressorSeat,

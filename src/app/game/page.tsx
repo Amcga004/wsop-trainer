@@ -187,26 +187,30 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
                 )}
               </div>
             ) : (
-              <div className={`flex flex-col items-center gap-0.5 transition-opacity ${isActive ? 'opacity-100' : 'opacity-15'}`}>
-                {isActive && (
-                  <div className="flex gap-0.5">
-                    <Card r="?" s="" size={cardSize} faceDown />
-                    <Card r="?" s="" size={cardSize} faceDown />
-                  </div>
-                )}
-                <div className="text-center rounded-full px-1.5 py-0.5 whitespace-nowrap"
-                  style={isActive ? { background: 'rgba(22,27,34,0.90)', border: '1px solid #30363d' } : {}}>
-                  <div className="font-bold font-['Syne'] leading-none"
-                    style={{ fontSize: compact ? 7 : 9, color: isActive ? '#8b949e' : '#484f58' }}>
-                    {seat.position}
-                  </div>
-                  {isActive && (
-                    <div className="text-[#484f58] leading-none" style={{ fontSize: compact ? 6 : 7 }}>
-                      {fmt(seat.stack)}
+              <div className="flex flex-col items-center gap-0.5">
+                {/* Cards — visible only when active, faded when folded */}
+                <div style={{ opacity: isActive ? 1 : 0.25 }}>
+                  {isActive ? (
+                    <div className="flex gap-0.5">
+                      <Card r="?" s="" size={cardSize} faceDown />
+                      <Card r="?" s="" size={cardSize} faceDown />
                     </div>
+                  ) : (
+                    <div style={{ height: compact ? 18 : 32 }} />
                   )}
                 </div>
-                {seat.position === 'BTN' && isActive && (
+                {/* Position label + stack — always full opacity */}
+                <div className="text-center rounded-full px-1.5 py-0.5 whitespace-nowrap"
+                  style={{ background: 'rgba(22,27,34,0.90)', border: '1px solid #30363d' }}>
+                  <div className="font-bold font-['Syne'] leading-none"
+                    style={{ fontSize: compact ? 7 : 9, color: isActive ? '#d4a843' : '#6b7280' }}>
+                    {seat.position}
+                  </div>
+                  <div className="leading-none" style={{ fontSize: compact ? 6 : 7, color: '#484f58' }}>
+                    {fmt(seat.stack)}
+                  </div>
+                </div>
+                {seat.position === 'BTN' && (
                   <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full
                     flex items-center justify-center text-[6px] font-bold z-30"
                     style={{ background: '#e6edf3', color: '#0d1117', border: '1px solid #30363d',
@@ -525,7 +529,7 @@ function RightPanelPlaying({ decision, takeAction, pot }: {
 }) {
   if (!decision) return null
   return (
-    <div className="flex flex-col gap-3 h-full">
+    <div className="flex flex-col gap-3">
       <div className="bg-[#161b22] rounded-xl border-l-2 border-[#d4a843] p-3 flex-shrink-0">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-[#d4a843] text-[10px] font-bold uppercase tracking-widest font-['Syne']">
@@ -1224,6 +1228,16 @@ export default function GamePage() {
                 </span>
               </div>
               <div className="text-[#8b949e] text-[11px] leading-relaxed">{decision.desc}</div>
+              {engine.primaryVillain && engine.primaryVillain.rangeStrength > 0 && (
+                <div className="mt-1.5 text-[9px] leading-snug" style={{ color:
+                  engine.primaryVillain.rangeStrength >= 8 ? '#f85149' :
+                  engine.primaryVillain.rangeStrength >= 6 ? '#d4a843' :
+                  engine.primaryVillain.rangeStrength >= 4 ? '#3fb950' :
+                  '#484f58'
+                }}>
+                  Villain: {engine.primaryVillain.rangeNarrow}
+                </div>
+              )}
             </div>
           )}
           {phase === 'playing' && decision && (

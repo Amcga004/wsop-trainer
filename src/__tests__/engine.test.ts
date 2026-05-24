@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   createHand, createTable, assignPositions, processHeroAction, advanceToNextStreet,
-  type HandEngine, type HeroOption,
+  scoreSequence,
+  type HandEngine, type HeroOption, type VillainProfile,
 } from '../engine/handEngine'
 import { compareHands } from '../engine/handEval'
 import {
@@ -998,6 +999,78 @@ describe('100-hand tournament simulation', () => {
       const finished = playHandToEnd(engine, levelIndex)
       const after = finished.seats.reduce((s, seat) => s + seat.stack, 0) + finished.pot
       expect(Math.abs(after - STARTING * 9)).toBeLessThanOrEqual(1)
+    }
+  })
+})
+
+// ── SUITE 16: Villain sequence scoring ───────────────────────
+describe('Villain sequence scoring', () => {
+  it('Fold sequences return strength 0', () => {
+    expect(scoreSequence(['fold']).strength).toBe(0)
+    expect(scoreSequence(['rfi', 'b', 'f']).strength).toBe(0)
+    expect(scoreSequence(['call', 'xf']).strength).toBe(0)
+  })
+
+  it('Strong sequences score 8+', () => {
+    expect(scoreSequence(['rfi', 'b', 'c', 'r']).strength).toBeGreaterThanOrEqual(8)
+    expect(scoreSequence(['call', 'xr']).strength).toBeGreaterThanOrEqual(8)
+    expect(scoreSequence(['3bet', 'b', 'c', 'r']).strength).toBeGreaterThanOrEqual(9)
+    expect(scoreSequence(['rfi', 'b', 'c', 'r', 'b']).strength).toBeGreaterThanOrEqual(9)
+  })
+
+  it('Weak sequences score 4 or less', () => {
+    expect(scoreSequence(['rfi', 'x', 'x']).strength).toBeLessThanOrEqual(4)
+    expect(scoreSequence(['call', 'xc', 'x']).strength).toBeLessThanOrEqual(4)
+    expect(scoreSequence(['rfi', 'b', 'x']).strength).toBeLessThanOrEqual(4)
+  })
+
+  it('All 9-hand level has valid villain profiles', () => {
+    for (let hand = 0; hand < 9; hand++) {
+      const btn = getDealerButtonForHand(hand, 4)
+      const engine = makeHandAt(0, 4, btn)
+      expect(engine.villainProfiles).toHaveLength(8)
+      engine.villainProfiles.forEach(p => {
+        expect(p.rangeStrength).toBeGreaterThanOrEqual(0)
+        expect(p.rangeStrength).toBeLessThanOrEqual(10)
+      })
+    }
+  })
+
+  it('Profiles update after hand plays out', () => {
+    const btn = getDealerButtonForHand(0, 4)
+    const engine = makeHandAt(0, 4, btn)
+    const finished = playHandToEnd(engine, 0)
+    finished.villainProfiles.forEach(p => {
+      expect(Array.isArray(p.actionSequence)).toBe(true)
+      expect(p.rangeStrength).toBeGreaterThanOrEqual(0)
+    })
+  })
+
+  it('scoreSequence handles unknown sequences via fallback', () => {
+    const result = scoreSequence(['rfi', 'b', 'c', 'b', 'c', 'b'])
+    expect(result.strength).toBeGreaterThanOrEqual(0)
+    expect(result.strength).toBeLessThanOrEqual(10)
+    expect(result.description.length).toBeGreaterThan(0)
+  })
+
+  it('3-bet preflop code scores 7', () => {
+    expect(scoreSequence(['3bet']).strength).toBe(7)
+  })
+
+  it('rfi scores 5, limp scores 3', () => {
+    expect(scoreSequence(['rfi']).strength).toBe(5)
+    expect(scoreSequence(['limp']).strength).toBe(3)
+  })
+
+  it('folded villains have rangeStrength 0', () => {
+    for (let btn = 0; btn < 9; btn++) {
+      const engine = makeHandAt(0, 4, getDealerButtonForHand(btn, 4))
+      const folded = engine.villainProfiles.filter(
+        p => engine.seats.find(s => s.seatIndex === p.seatIndex)?.folded
+      )
+      for (const p of folded) {
+        expect(p.rangeStrength).toBe(0)
+      }
     }
   })
 })

@@ -270,24 +270,26 @@ export function useGameState(initialMode: SessionMode = 'full') {
       let guessCorrect = ''
 
       // If hand is over — resolve chips
+      let resolvedChipDelta = chipDelta
       if (newEngine.isOver) {
         const heroInvested = newEngine.heroSeat.invested
-        const pot = newEngine.pot
+        const totalPot = newEngine.pot
 
         if (newEngine.heroWon && !newEngine.isTie) {
-          // Hero wins — credit net gain to hero
-          const gain = pot - heroInvested
-          newEngine.heroSeat.stack += gain
+          // Hero wins entire pot
+          newEngine.heroSeat.stack += totalPot
+          resolvedChipDelta = totalPot - heroInvested
         } else if (newEngine.isTie) {
-          // Chop — both players get their half back
-          const villainShare = Math.floor(pot / 2)
+          // Chop — split pot
+          const heroShare = Math.floor(totalPot / 2)
+          const villainShare = totalPot - heroShare
+          newEngine.heroSeat.stack += heroShare
           const tieVillain = newEngine.showdownSeat
           if (tieVillain) {
             const vs = newEngine.seats.find(s => s.seatIndex === tieVillain.seatIndex)
             if (vs) vs.stack += villainShare
-            tieVillain.stack += villainShare
           }
-          newEngine.heroSeat.stack += pot - villainShare
+          resolvedChipDelta = heroShare - heroInvested
         } else {
           // Villain wins
           const winner = newEngine.showdownSeat
@@ -296,21 +298,23 @@ export function useGameState(initialMode: SessionMode = 'full') {
               )
           if (winner) {
             const ws = newEngine.seats.find(s => s.seatIndex === winner.seatIndex)
-            const winnerInvested = ws?.invested ?? pot
-            const heroInvestedThisHand = newEngine.heroSeat.invested
-            if (winner.allIn && winnerInvested < heroInvestedThisHand) {
-              // Side pot: villain all-in for less — they can only win the main pot
-              const mainPot = Math.min(winnerInvested * 2, pot)
-              const sidePot = pot - mainPot
+            const winnerInvested = ws?.invested ?? totalPot
+            if (winner.allIn && winnerInvested < heroInvested) {
+              // Side pot: villain all-in for less
+              const mainPot = Math.min(winnerInvested * 2, totalPot)
+              const sidePot = totalPot - mainPot
               if (ws) ws.stack += mainPot
-              winner.stack += mainPot
               newEngine.heroSeat.stack += sidePot
+              resolvedChipDelta = sidePot - heroInvested
             } else {
-              if (ws) ws.stack += pot
-              winner.stack += pot
+              if (ws) ws.stack += totalPot
+              resolvedChipDelta = -heroInvested
             }
+          } else {
+            resolvedChipDelta = -heroInvested
           }
         }
+        newEngine.pot = 0
 
         // If went to showdown — show guess screen
         if (newEngine.showdownSeat) {
@@ -333,11 +337,7 @@ export function useGameState(initialMode: SessionMode = 'full') {
         sessionDecisions: newDecisions,
         lastOption:       option,
         lastDecision:     savedDecision,
-        lastChipDelta:    newEngine.isOver
-          ? (newEngine.heroWon
-              ? newEngine.pot - newEngine.heroSeat.invested
-              : -prev.heroStackBefore + newEngine.heroSeat.stack)
-          : chipDelta,
+        lastChipDelta:    resolvedChipDelta,
         phase:            nextPhase,
         guessOptions,
         guessCorrect,
@@ -365,9 +365,30 @@ export function useGameState(initialMode: SessionMode = 'full') {
         engineClone.currentDecision = nextDecision
 
         // Chip resolution if hand ended during advance
-        if (engineClone.isOver && engineClone.heroWon && !engineClone.isTie) {
-          const gain = engineClone.pot - engineClone.heroSeat.invested
-          engineClone.heroSeat.stack += gain
+        if (engineClone.isOver) {
+          const totalPot = engineClone.pot
+          if (engineClone.heroWon && !engineClone.isTie) {
+            engineClone.heroSeat.stack += totalPot
+          } else if (engineClone.isTie) {
+            const heroShare = Math.floor(totalPot / 2)
+            const villainShare = totalPot - heroShare
+            engineClone.heroSeat.stack += heroShare
+            const tieVillain = engineClone.showdownSeat
+            if (tieVillain) {
+              const vs = engineClone.seats.find(s => s.seatIndex === tieVillain.seatIndex)
+              if (vs) vs.stack += villainShare
+            }
+          } else {
+            const winner = engineClone.showdownSeat
+              ?? engineClone.activeSeats.find(
+                  s => s.seatIndex !== engineClone.heroSeat.seatIndex && !s.folded
+                )
+            if (winner) {
+              const ws = engineClone.seats.find(s => s.seatIndex === winner.seatIndex)
+              if (ws) ws.stack += totalPot
+            }
+          }
+          engineClone.pot = 0
         }
 
         let nextPhase: GamePhase = nextDecision ? 'playing' : 'outcome'
@@ -491,28 +512,56 @@ export function useGameState(initialMode: SessionMode = 'full') {
       const levelHandIndex = newTotalHands % HANDS_PER_LEVEL
       const newDealerButton = getDealerButtonForHand(levelHandIndex, prev.heroSeatIndex)
 
-      // Update villain stacks from engine results, with inter-hand variance
-      const bb = getBB(prev.levelIndex)
+      // ── VILLAIN STACK VARIATION ──────────────────────────────
+      // Zero-sum chip movement between villains; busted villains
+      // replaced by new players from the tournament field.
+      // Hero stack is never touched by this logic.
+      const bb  = getBB(prev.levelIndex)
+      const r100v = (n: number) => Math.round(n / 100) * 100
+      const minStack = r100v(bb * 3)   // minimum to stay seated
+      const minNew   = r100v(bb * 10)  // minimum new-player stack
+
+      // Seed from actual engine stacks after the hand
+      const villainStacks = new Map<number, number>()
+      prev.engine!.seats.forEach(seat => {
+        if (seat.seatIndex === prev.heroSeatIndex) return
+        villainStacks.set(seat.seatIndex, Math.max(minStack, seat.stack))
+      })
+
+      // Simulate 1–3 inter-hand chip transfers between villains
+      const vIdxs = [...villainStacks.keys()]
+      const numEvents = Math.floor(Math.random() * 3) + 1
+      for (let e = 0; e < numEvents; e++) {
+        if (vIdxs.length < 2) break
+        const i1 = Math.floor(Math.random() * vIdxs.length)
+        let i2 = Math.floor(Math.random() * vIdxs.length)
+        while (i2 === i1) i2 = Math.floor(Math.random() * vIdxs.length)
+        const s1 = vIdxs[i1]; const s2 = vIdxs[i2]
+        const st1 = villainStacks.get(s1)!
+        const st2 = villainStacks.get(s2)!
+        const transfer = r100v(Math.min(st1, st2) * (0.05 + Math.random() * 0.35))
+        if (Math.random() < 0.5) {
+          villainStacks.set(s1, Math.max(minStack, st1 - transfer))
+          villainStacks.set(s2, st2 + transfer)
+        } else {
+          villainStacks.set(s2, Math.max(minStack, st2 - transfer))
+          villainStacks.set(s1, st1 + transfer)
+        }
+      }
+
+      // Replace busted villains with new tournament entrants
+      const maxStack = Math.max(heroStack, ...villainStacks.values())
+      const maxNew   = r100v(maxStack * 1.1)
+      villainStacks.forEach((stack, seatIdx) => {
+        if (stack <= minStack) {
+          villainStacks.set(seatIdx, r100v(minNew + Math.random() * (maxNew - minNew)))
+        }
+      })
+
       const updatedTableSeats = prev.tableSeats.map((seat, i) => {
         if (i === prev.heroSeatIndex) return { ...seat, stack: heroStack }
-        const engineSeat = prev.engine!.seats.find(s => s.seatIndex === i)
-        if (!engineSeat) return seat
-        const baseStack = Math.max(bb * 3, engineSeat.stack)
-        const roll = Math.random()
-        let newStack: number
-        if (roll < 0.06) {
-          // Bust — replace with a new player at median stack
-          newStack = bb * 50
-        } else if (roll < 0.14) {
-          // Significant loss — floor at 3BB
-          newStack = bb * 3
-        } else if (roll < 0.22) {
-          // Big win — cap at 200BB
-          newStack = bb * 200
-        } else {
-          newStack = baseStack
-        }
-        return { ...seat, stack: newStack }
+        const newStack = villainStacks.get(i)
+        return newStack !== undefined ? { ...seat, stack: newStack } : seat
       })
 
       const btn = newDealerButton
