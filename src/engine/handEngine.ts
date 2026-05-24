@@ -525,7 +525,7 @@ function resolveVillainPreflop(
   if (currentBet === bb && raisers === 0 && limpers > 0) {
     if (inRFI && Math.random() > 0.35) {
       const isoSize = getOpenSize(levelIndex, seat.stack, false) +
-        (limpers * Math.round(bb * 0.5))
+        (limpers * r100(bb * 0.5))
       return {
         action: { type: 'raise', amount: isoSize },
         desc: `${seat.position} raises to ${isoSize.toLocaleString()}`,

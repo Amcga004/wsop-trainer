@@ -2,6 +2,10 @@
 // Format: [smallBlind, bigBlind] — BB ante = bigBlind
 // Source: official WSOP 2024 structure sheet
 
+function r100(n: number): number {
+  return Math.round(n / 100) * 100
+}
+
 export const LEVELS: [number, number][] = [
   [100, 200],
   [200, 300],
@@ -148,7 +152,7 @@ export function getOpenSize(
   // for positional disadvantage postflop
   if (!isIP) mult += 0.3
 
-  return Math.round(bb * mult)
+  return r100(bb * mult)
 }
 
 // ICM pressure: true when within 200 players of the bubble
