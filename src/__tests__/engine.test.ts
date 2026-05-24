@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   createHand, createTable, assignPositions, processHeroAction, advanceToNextStreet,
-  scoreSequence,
+  scoreSequence, calcRangeAdvantage, calcNutAdvantage, sprCategory,
   type HandEngine, type HeroOption, type VillainProfile,
 } from '../engine/handEngine'
 import { compareHands } from '../engine/handEval'
@@ -1113,5 +1113,70 @@ describe('Blocker bet logic', () => {
     const unknownVillainStrength = 0
     const shouldNotFire = 'river' === 'river' && unknownVillainStrength >= 4
     expect(shouldNotFire).toBe(false)
+  })
+})
+
+describe('Range/nut advantage functions', () => {
+  it('calcRangeAdvantage: ace-high board favors aggressor', () => {
+    const board = [
+      { r: 'A', s: 'h' }, { r: 'K', s: 'd' }, { r: '7', s: 'c' },
+    ]
+    expect(calcRangeAdvantage('BTN', board, true)).toBeGreaterThanOrEqual(2)
+    expect(calcRangeAdvantage('BB', board, false)).toBeLessThanOrEqual(1)
+  })
+
+  it('calcRangeAdvantage: low connected board favors caller', () => {
+    const board = [
+      { r: '7', s: 'h' }, { r: '6', s: 'd' }, { r: '5', s: 'c' },
+    ]
+    expect(calcRangeAdvantage('BTN', board, true)).toBeLessThanOrEqual(1)
+    expect(calcRangeAdvantage('BB', board, false)).toBeGreaterThanOrEqual(2)
+  })
+
+  it('calcNutAdvantage: ace-high paired board favors aggressor', () => {
+    const board = [
+      { r: 'A', s: 'h' }, { r: 'A', s: 'd' }, { r: 'K', s: 'c' },
+    ]
+    expect(calcNutAdvantage('BTN', board, true)).toBe(2)
+    expect(calcNutAdvantage('BB', board, false)).toBe(0)
+  })
+
+  it('calcNutAdvantage: low connected board favors caller', () => {
+    const board = [
+      { r: '8', s: 'h' }, { r: '7', s: 'd' }, { r: '6', s: 'c' },
+    ]
+    expect(calcNutAdvantage('BTN', board, true)).toBe(0)
+    expect(calcNutAdvantage('BB', board, false)).toBe(2)
+  })
+
+  it('calcRangeAdvantage: empty board returns 1', () => {
+    expect(calcRangeAdvantage('BTN', [], true)).toBe(1)
+    expect(calcRangeAdvantage('BB', [], false)).toBe(1)
+  })
+
+  it('sprCategory: buckets are correct', () => {
+    expect(sprCategory(500, 1000)).toBe('very_low')   // 0.5
+    expect(sprCategory(2000, 1000)).toBe('low')        // 2
+    expect(sprCategory(5000, 1000)).toBe('medium')     // 5
+    expect(sprCategory(10000, 1000)).toBe('high')      // 10
+    expect(sprCategory(20000, 1000)).toBe('very_high') // 20
+    expect(sprCategory(5000, 0)).toBe('high')          // zero-pot guard
+  })
+
+  it('All 9 hands in a level complete without errors', () => {
+    for (let hand = 0; hand < 9; hand++) {
+      const btn = getDealerButtonForHand(hand, 4)
+      const engine = makeHandAt(0, 4, btn)
+      expect(() => playHandToEnd(engine, 0, 18000)).not.toThrow()
+      expect(engine.isOver).toBe(true)
+    }
+  })
+
+  it('Stack conservation: chip totals unchanged across a hand', () => {
+    const engine = makeHandAt(0, 4)
+    const startTotal = engine.seats.reduce((sum, s) => sum + s.stack + s.invested, 0)
+    playHandToEnd(engine, 0, 18000)
+    const endTotal = engine.seats.reduce((sum, s) => sum + s.stack + s.invested, 0)
+    expect(endTotal).toBe(startTotal)
   })
 })

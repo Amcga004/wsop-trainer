@@ -298,7 +298,28 @@ function resolveVillainPostflop(
   const boardVals = board.map(c => RANK_VAL_V[c.r]).sort((a,b) => b-a)
   const rankRange = boardVals.length >= 2 ? boardVals[0] - boardVals[boardVals.length-1] : 0
   const isWet = maxSuitCount >= 2 || rankRange <= 4
+  const isDry = !isWet
   const textureFoldAdj = isWet ? 0.08 : -0.05
+  const rangeAdv = calcRangeAdvantage(seat.position, board, isAggressor)
+  const nutAdv = calcNutAdvantage(seat.position, board, isAggressor)
+  const effStack = Math.min(seat.stack, pot > 0 ? pot * 20 : seat.stack)
+  const spr = sprCategory(effStack, pot)
+  const villainIsIP = ['BTN', 'CO', 'HJ'].includes(seat.position)
+  const aggrScore = rangeAdv + nutAdv + (villainIsIP ? 1 : 0) + (isDry ? 1 : 0) + (isAggressor ? 2 : 0)
+
+  // Inner function: SPR/nut-aware bet sizing
+  const villainBetSizePct = (handStr: number): number => {
+    const base = seat.archetype === 'LP' ? 0.50 :
+                 seat.archetype === 'TA' ? 0.65 :
+                 seat.archetype === 'LA' ? 0.90 : 0.50
+    const nutBonus = (nutAdv >= 2 && handStr >= 4) ? 0.15 : 0
+    const sprAdj = spr === 'very_high' ? 0.85 :
+                   spr === 'high'      ? 1.00 :
+                   spr === 'medium'    ? 1.10 :
+                   spr === 'low'       ? 1.20 : 1.30
+    const strAdj = handStr >= 4 ? 1.15 : handStr === 0 ? 0.85 : 1.00
+    return Math.min(1.0, (base + nutBonus) * sprAdj * strAdj)
+  }
 
   // Facing a bet
   if (betFacing > 0) {
@@ -371,10 +392,10 @@ function resolveVillainPostflop(
 
   // Checking (no bet facing)
 
-  // FIX 6: River polarization — value bet strong, bluff air, check medium
+  // River polarization — value bet strong, bluff air, check medium
   if (street === 'river') {
     if (hs.str >= 4) {
-      const betAmt = villainBetSize(seat.archetype, pot, seat.stack, street, hs.str)
+      const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(hs.str))))
       return {
         action: { type: 'raise', amount: betAmt },
         desc: `${seat.position} bets ${betAmt.toLocaleString()}`
@@ -383,7 +404,7 @@ function resolveVillainPostflop(
     if (hs.str === 2) {
       const thinValueProb = seat.archetype === 'LA' ? 0.55 : seat.archetype === 'TA' ? 0.35 : 0.20
       if (Math.random() < thinValueProb) {
-        const betAmt = villainBetSize(seat.archetype, pot, seat.stack, street, hs.str)
+        const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(hs.str))))
         return {
           action: { type: 'raise', amount: betAmt },
           desc: `${seat.position} bets ${betAmt.toLocaleString()}`
@@ -394,7 +415,7 @@ function resolveVillainPostflop(
     if (hs.str === 0 && !hs.heroFD && !hs.oesd) {
       const bluffProb = seat.archetype === 'LA' ? 0.45 : seat.archetype === 'TA' ? 0.20 : 0.10
       if (Math.random() < bluffProb) {
-        const betAmt = villainBetSize(seat.archetype, pot, seat.stack, street, 0)
+        const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(0))))
         return {
           action: { type: 'raise', amount: betAmt },
           desc: `${seat.position} bets ${betAmt.toLocaleString()}`
@@ -404,11 +425,16 @@ function resolveVillainPostflop(
     return { action: { type: 'check' }, desc: `${seat.position} checks` }
   }
 
-  // Strong hands: bet for value (FIX 5: betFrequency variable)
+  // Strong hands: bet for value
   if (hs.str >= 3) {
-    const betFrequency = isAggressor ? 0.85 : isWet ? 0.45 : 0.70
-    if (Math.random() < betFrequency) {
-      const betAmt = villainBetSize(seat.archetype, pot, seat.stack, street, hs.str)
+    const baseBetFreq = isAggressor ? 0.75 : 0.50
+    const streetMult = street === 'flop' ? 1.0 : street === 'turn' ? 0.85 : 0.70
+    const handMult = hs.str >= 4 ? 1.20 : hs.str === 3 ? 1.0 : 0.80
+    const finalBetFreq = baseBetFreq * streetMult * handMult
+    const minFreq = (spr === 'very_low' || spr === 'low') ? 0.90 : 0
+    const adjustedBetFreq = Math.max(minFreq, Math.min(0.95, finalBetFreq + aggrScore * 0.04))
+    if (Math.random() < adjustedBetFreq) {
+      const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(hs.str))))
       return {
         action: { type: 'raise', amount: betAmt },
         desc: `${seat.position} bets ${betAmt.toLocaleString()}`
@@ -421,7 +447,7 @@ function resolveVillainPostflop(
   if (hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')) {
     const betProb = seat.archetype === 'LA' ? 0.7 : seat.archetype === 'TA' ? 0.55 : seat.archetype === 'LP' ? 0.3 : 0.2
     if (Math.random() < betProb) {
-      const betAmt = villainBetSize(seat.archetype, pot, seat.stack, street, hs.str)
+      const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(hs.str))))
       return {
         action: { type: 'raise', amount: betAmt },
         desc: `${seat.position} bets ${betAmt.toLocaleString()}`
@@ -430,12 +456,12 @@ function resolveVillainPostflop(
     return { action: { type: 'check' }, desc: `${seat.position} checks` }
   }
 
-  // FIX 4: Semi-bluff draws (river already handled above)
+  // Semi-bluff draws (river already handled above)
   if (hs.heroFD || hs.oesd) {
     const semiBluffProb = isWet ? 0.55 : 0.30
     const archAdj = seat.archetype === 'LA' ? 0.15 : seat.archetype === 'TA' ? 0.05 : 0
     if (Math.random() < semiBluffProb + archAdj) {
-      const betAmt = villainBetSize(seat.archetype, pot, seat.stack, street, 0)
+      const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(0))))
       return {
         action: { type: 'raise', amount: betAmt },
         desc: `${seat.position} bets ${betAmt.toLocaleString()}`
@@ -443,11 +469,11 @@ function resolveVillainPostflop(
     }
   }
 
-  // FIX 4: Thin value with second/bottom pair
+  // Thin value with second/bottom pair
   if (hs.str === 1 && hs.pairPos !== 'toppair' && hs.pairPos !== 'overpair') {
     const thinValueProb = seat.archetype === 'LA' ? 0.40 : seat.archetype === 'TA' ? 0.25 : 0.15
     if (Math.random() < thinValueProb) {
-      const betAmt = villainBetSize(seat.archetype, pot, seat.stack, street, 1)
+      const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(1))))
       return {
         action: { type: 'raise', amount: betAmt },
         desc: `${seat.position} bets ${betAmt.toLocaleString()}`
@@ -458,7 +484,7 @@ function resolveVillainPostflop(
   // LA bluffs sometimes (river already handled above)
   if (seat.archetype === 'LA' && hs.str === 0) {
     if (Math.random() < 0.28) {
-      const betAmt = villainBetSize(seat.archetype, pot, seat.stack, street, 0)
+      const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(0))))
       return {
         action: { type: 'raise', amount: betAmt },
         desc: `${seat.position} bets ${betAmt.toLocaleString()}`
@@ -627,6 +653,88 @@ function resolveVillainPreflop(
 
 function r100(n: number): number {
   return Math.round(n / 100) * 100
+}
+
+// ── RANGE ADVANTAGE ──────────────────────────────────────────
+export function calcRangeAdvantage(
+  _position: string,
+  board: Card[],
+  isAggressor: boolean,
+): number {
+  if (board.length === 0) return 1
+  const ranks = board.map(c => c.r)
+  const highCards = ranks.filter(r => ['A','K','Q','J','T'].includes(r)).length
+  const hasAce  = ranks.includes('A')
+  const rankVals = board.map(c => 'AKQJT98765432'.indexOf(c.r))
+  const spread = Math.max(...rankVals) - Math.min(...rankVals)
+  const isConnected = spread <= 4 && board.length >= 3
+  const suits = board.map(c => c.s)
+  const uniqueSuits = new Set(suits).size
+  const isMonotone = uniqueSuits === 1 && board.length >= 3
+  if (isAggressor) {
+    if (hasAce && highCards >= 2) return 3
+    if (hasAce) return 2
+    if (highCards >= 2) return 2
+    if (isMonotone) return 1
+    if (isConnected && !hasAce) return 0
+    return 1
+  } else {
+    if (isConnected && !hasAce && highCards === 0) return 3
+    if (isConnected && highCards <= 1) return 2
+    if (isMonotone) return 2
+    if (hasAce && highCards >= 2) return 0
+    return 1
+  }
+}
+
+// ── NUT ADVANTAGE ────────────────────────────────────────────
+export function calcNutAdvantage(
+  _position: string,
+  board: Card[],
+  isAggressor: boolean,
+): number {
+  if (board.length === 0) return 1
+  const ranks = board.map(c => c.r)
+  const hasAce   = ranks.includes('A')
+  const highCards = ranks.filter(r => ['A','K','Q','J','T'].includes(r)).length
+  const rankCounts: Record<string, number> = {}
+  ranks.forEach(r => { rankCounts[r] = (rankCounts[r] || 0) + 1 })
+  const isPaired = Object.values(rankCounts).some(c => c >= 2)
+  const rankVals = board.map(c => 'AKQJT98765432'.indexOf(c.r))
+  const spread = Math.max(...rankVals) - Math.min(...rankVals)
+  const isConnected = spread <= 4 && board.length >= 3
+  const suitCounts: Record<string, number> = {}
+  board.forEach(c => { suitCounts[c.s] = (suitCounts[c.s] || 0) + 1 })
+  const maxSuit = Object.values(suitCounts).length > 0
+    ? Math.max(...Object.values(suitCounts)) : 0
+  const flushDraw = maxSuit >= 2
+  if (isAggressor) {
+    if (hasAce && highCards >= 2) return 2
+    if (isPaired && highCards >= 1) return 2
+    if (hasAce) return 2
+    if (isConnected && !hasAce) return 0
+    if (flushDraw && highCards === 0) return 0
+    return 1
+  } else {
+    if (isConnected && !hasAce) return 2
+    if (flushDraw && highCards === 0) return 2
+    if (hasAce && highCards >= 2) return 0
+    return 1
+  }
+}
+
+// ── SPR CATEGORY ─────────────────────────────────────────────
+export function sprCategory(
+  effectiveStack: number,
+  pot: number,
+): 'very_low' | 'low' | 'medium' | 'high' | 'very_high' {
+  if (pot === 0) return 'high'
+  const spr = effectiveStack / pot
+  if (spr <= 1)  return 'very_low'
+  if (spr <= 3)  return 'low'
+  if (spr <= 6)  return 'medium'
+  if (spr <= 12) return 'high'
+  return 'very_high'
 }
 
 export function scoreSequence(seq: string[]): { strength: number; description: string } {
@@ -1345,6 +1453,23 @@ function generateHeroOptions(
     (hs.pairPos === 'overpair' || hs.pairPos === 'toppair') &&
     isWet
 
+  // Range / nut awareness for hero
+  const heroIsAggressor = heroRaisedPreflop || (streetHistory?.some(
+    s => s.street !== 'preflop' && s.heroAction.toLowerCase().includes('bet')
+  ) ?? false)
+  const heroRangeAdv = calcRangeAdvantage(heroSeat.position, board, heroIsAggressor)
+  const heroNutAdv   = calcNutAdvantage(heroSeat.position, board, heroIsAggressor)
+  const rangeContext = heroRangeAdv >= 3
+    ? ' Your range connects strongly with this board.'
+    : heroRangeAdv === 0
+    ? " Villain's range connects better with this board."
+    : ''
+  const nutContext = heroNutAdv >= 2
+    ? ' You have the nut advantage here.'
+    : heroNutAdv === 0
+    ? ' Villain has the nut advantage.'
+    : ''
+
   // Facing a bet
   if (currentBet > 0) {
     const potOdds = currentBet / (pot + currentBet)
@@ -1459,6 +1584,7 @@ function generateHeroOptions(
   const checkQuality: Quality =
     isIPFreeShowdownSpot ? 'best' :
     isBlockerBetSpot ? 'good' :
+    (heroRangeAdv === 0 && heroNutAdv === 0) ? 'best' :
     villainRaisedLastStreet ? 'best' :
     (villainStrong && hs && hs.str < 3) ? 'best' :
     (villainStrong && hs && hs.str >= 5) ? 'ok' :
@@ -1484,6 +1610,8 @@ function generateHeroOptions(
         ? `Check and re-evaluate — villain showed aggression last street.${villainContext}`
         : heroDonking && hs && hs.str < 2
         ? `Check here — don't donk bet weak hands into the preflop raiser. Let them c-bet and react with your hand strength.`
+        : heroRangeAdv === 0 && heroNutAdv === 0
+        ? `Check — villain's range and nut advantage make betting dangerous here.${rangeContext}${nutContext}`
         : `High card has little equity. Check and see a free card.`)
       : checkQuality === 'bad'
       ? `Never slowplay ${hs?.label ?? 'this hand'} on the river. Bet for value — checking gives free showdowns.${villainContext}`
@@ -1495,11 +1623,13 @@ function generateHeroOptions(
   // Turn and river bets scale up: narrower range = larger sizing
   const streetSizeAdj = street === 'river' ? 1.20 :
                         street === 'turn'  ? 1.12 : 1.0
+  // Nut advantage increases sizing; disadvantage decreases it
+  const nutSizeMult = heroNutAdv >= 2 ? 1.15 : heroNutAdv === 0 ? 0.85 : 1.0
 
   // Bet small
-  const rawBetSm  = Math.round(pot * texStrat.cBetSizing * 0.70 * multiwayAdj * streetSizeAdj / 100) * 100
-  const rawBetMed = Math.round(pot * texStrat.cBetSizing        * multiwayAdj * streetSizeAdj / 100) * 100
-  const rawBetLg  = Math.round(pot * texStrat.cBetSizing * 1.35 * multiwayAdj * streetSizeAdj / 100) * 100
+  const rawBetSm  = r100(pot * texStrat.cBetSizing * 0.70 * multiwayAdj * streetSizeAdj * nutSizeMult)
+  const rawBetMed = r100(pot * texStrat.cBetSizing        * multiwayAdj * streetSizeAdj * nutSizeMult)
+  const rawBetLg  = r100(pot * texStrat.cBetSizing * 1.35 * multiwayAdj * streetSizeAdj * nutSizeMult)
 
   const betSm  = Math.min(heroSeat.stack, Math.max(100, rawBetSm))
   const betMed = Math.min(heroSeat.stack, Math.max(100, rawBetMed))
@@ -1533,7 +1663,7 @@ function generateHeroOptions(
       if (hs.str === 0) return 'ok'
       return 'bad'
     }
-    // Medium villain — standard logic
+    // Medium villain — range/nut aware logic
     if (heroDonking) {
       if (hs.str >= 3) return 'good'
       if (hs.str === 2) return 'ok'
@@ -1545,12 +1675,22 @@ function generateHeroOptions(
       if (hs.str === 3) return 'ok'
       return 'bad'
     }
+    // Range/nut disadvantage: don't bluff into villain's board
+    if (heroRangeAdv === 0 && heroNutAdv === 0 && hs.str <= 1) return 'bad'
+    // Range/nut advantage: upgrade semi-bluffs
+    if (heroRangeAdv >= 2 && heroNutAdv >= 1 && hs.str === 0 && (hs.heroFD || hs.oesd)) {
+      return sizing === 'sm' ? 'good' : 'ok'
+    }
     if (hs.str >= 5) return 'best'
     if (hs.str === 4) return sizing === 'sm' ? 'good' : 'best'
     if (hs.str === 3) return sizing === 'lg' ? 'ok' : 'best'
-    if (hs.str === 2) return sizing === 'med' ? 'best' : 'good'
+    if (hs.str === 2) {
+      // Nut advantage lets us size up more aggressively
+      if (heroNutAdv >= 2) return 'best'
+      return sizing === 'med' ? 'best' : 'good'
+    }
     if (hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')) {
-      return 'best'
+      return heroRangeAdv >= 2 ? 'best' : 'good'
     }
     if (hs.str === 1) return sizing === 'sm' ? 'ok' : 'bad'
     if (hs.str === 0 && heroRaisedPreflop && isDry && (hs.overcards ?? 0) >= 1) return 'ok'
@@ -1571,7 +1711,7 @@ function generateHeroOptions(
         ? `Blocker bet OOP. Small sizing (${Math.round(betSm / pot * 100)}% pot) gets you to showdown cheaply. Villain raises only with hands that beat you — fold to any raise. Villain calls or folds with worse. Never bet large here — you only get called by better.`
         : heroDonking && betQuality(hs, 'sm') === 'bad'
         ? `Avoid donk betting ${hs?.label ?? 'this hand'} into the preflop raiser. Check and let them bet — you can check-raise strong hands or check-call with draws.`
-        : `Small bet on ${texStrat.label} board. ${texStrat.note}${villainContext}`,
+        : `Small bet on ${texStrat.label} board. ${texStrat.note}${villainContext}${rangeContext}${nutContext}`,
     })
   }
 
@@ -1582,7 +1722,7 @@ function generateHeroOptions(
       amount: betMed,
       chipCost: betMed,
       quality: betQuality(hs, 'med'),
-      coaching: `Standard sizing. ${texStrat.note}${nearBubbleNote}${villainContext}`,
+      coaching: `Standard sizing. ${texStrat.note}${nearBubbleNote}${villainContext}${rangeContext}${nutContext}`,
     })
   }
 
@@ -1593,7 +1733,7 @@ function generateHeroOptions(
       amount: betLg,
       chipCost: betLg,
       quality: betQuality(hs, 'lg'),
-      coaching: `Large bet. Use this with strong hands that want to build the pot or strong draws charging a price.${villainContext}`,
+      coaching: `Large bet. Use this with strong hands that want to build the pot or strong draws charging a price.${villainContext}${rangeContext}${nutContext}`,
     })
   }
 
