@@ -1268,6 +1268,7 @@ function generateHeroOptions(
 
   const texture = board.length >= 3 ? classifyBoardTexture(board) : 'dry'
   const isDry = texture === 'dry'
+  const isWet = !isDry
   const texStrat = BOARD_TEXTURE[texture]
   const nearBubbleNote = nearBubble ? ' ICM pressure: avoid marginal spots.' : ''
 
@@ -1323,11 +1324,37 @@ function generateHeroOptions(
       return RV[c.r] > (hs?.pairVal ?? 0)
     })
 
+  // Blocker bet spot: OOP river, vulnerable made hand, wet board, villain known
+  const isBlockerBetSpot =
+    street === 'river' &&
+    !isIP &&
+    currentBet === 0 &&
+    hs !== null &&
+    hs.str === 1 &&
+    (hs.pairPos === 'overpair' || hs.pairPos === 'toppair') &&
+    isWet &&
+    (villainRangeStrength ?? 0) >= 4
+
+  // IP free showdown spot: IP river, vulnerable made hand, wet board
+  const isIPFreeShowdownSpot =
+    street === 'river' &&
+    isIP &&
+    currentBet === 0 &&
+    hs !== null &&
+    hs.str === 1 &&
+    (hs.pairPos === 'overpair' || hs.pairPos === 'toppair') &&
+    isWet
+
   // Facing a bet
   if (currentBet > 0) {
     const potOdds = currentBet / (pot + currentBet)
     // Fold — draw-aware with pot odds (FIX 3)
+    const riverVulnerableOOP =
+      street === 'river' && !isIP && isWet &&
+      hs !== null && hs.str === 1 &&
+      (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')
     const foldQuality: Quality =
+      riverVulnerableOOP ? 'best' :
       (hs && (hs.str >= 3 || hs.str >= 2)) ? 'bad' :
       (hs && hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')) ? 'bad' :
       (hs && hs.heroNFD && hs.oesd) ? 'bad' :
@@ -1341,7 +1368,9 @@ function generateHeroOptions(
       amount: 0,
       chipCost: 0,
       quality: foldQuality,
-      coaching: foldQuality === 'best'
+      coaching: riverVulnerableOOP
+        ? `Correct fold. You bet small as a blocker — villain's raise means they have you beat. This is the point of the blocker bet: define cheaply and fold to strength.`
+        : foldQuality === 'best'
         ? `Correct fold. ${hs?.label || 'Your hand'} has no equity here.${nearBubbleNote}`
         : foldQuality === 'bad'
         ? `Don't give up ${hs?.label || 'this hand'}. You have too much equity to fold.`
@@ -1428,6 +1457,8 @@ function generateHeroOptions(
                       activePlayers === 3 ? 1.10 : 1.0
   // Check
   const checkQuality: Quality =
+    isIPFreeShowdownSpot ? 'best' :
+    isBlockerBetSpot ? 'good' :
     villainRaisedLastStreet ? 'best' :
     (villainStrong && hs && hs.str < 3) ? 'best' :
     (villainStrong && hs && hs.str >= 5) ? 'ok' :
@@ -1444,7 +1475,11 @@ function generateHeroOptions(
     amount: 0,
     chipCost: 0,
     quality: checkQuality,
-    coaching: checkQuality === 'best'
+    coaching: isIPFreeShowdownSpot
+      ? `Check behind and take the free showdown. You're IP with a vulnerable hand on a wet board — checking closes the action and gets you to showdown for free. No reason to bet and face a raise.`
+      : isBlockerBetSpot
+      ? `Checking is fine but a small blocker bet is better. OOP on the river with a vulnerable hand, a blocker lets you control the pot size and fold cleanly to a raise.`
+      : checkQuality === 'best'
       ? (villainRaisedLastStreet
         ? `Check and re-evaluate — villain showed aggression last street.${villainContext}`
         : heroDonking && hs && hs.str < 2
@@ -1475,6 +1510,14 @@ function generateHeroOptions(
 
   const betQuality = (hs: HandResult | null, sizing: 'sm' | 'med' | 'lg'): Quality => {
     if (!hs) return 'ok'
+    if (isBlockerBetSpot) {
+      if (sizing === 'sm') return 'best'
+      return 'bad'
+    }
+    if (isIPFreeShowdownSpot) {
+      if (sizing === 'sm') return 'ok'
+      return 'bad'
+    }
     if (villainStrong) {
       if (hs.str >= 5) return 'best'
       if (hs.str === 4) return 'best'
@@ -1517,12 +1560,16 @@ function generateHeroOptions(
 
   if (!skipBetSm) {
     options.push({
-      label: `Bet ${betSm.toLocaleString()} (small)`,
+      label: isBlockerBetSpot
+        ? `Bet ${betSm.toLocaleString()} (blocker)`
+        : `Bet ${betSm.toLocaleString()} (small)`,
       type: 'raise',
       amount: betSm,
       chipCost: betSm,
       quality: betQuality(hs, 'sm'),
-      coaching: heroDonking && betQuality(hs, 'sm') === 'bad'
+      coaching: isBlockerBetSpot
+        ? `Blocker bet OOP. Small sizing (${Math.round(betSm / pot * 100)}% pot) gets you to showdown cheaply. Villain raises only with hands that beat you — fold to any raise. Villain calls or folds with worse. Never bet large here — you only get called by better.`
+        : heroDonking && betQuality(hs, 'sm') === 'bad'
         ? `Avoid donk betting ${hs?.label ?? 'this hand'} into the preflop raiser. Check and let them bet — you can check-raise strong hands or check-call with draws.`
         : `Small bet on ${texStrat.label} board. ${texStrat.note}${villainContext}`,
     })
