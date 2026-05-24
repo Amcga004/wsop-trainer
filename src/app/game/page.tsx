@@ -438,7 +438,7 @@ function LeftPanel({ state, bb, sb, ante, day, bbDepth, nearBubble }: {
   state: ReturnType<typeof useGameState>['state']
   bb: number; sb: number; ante: number; day: number; bbDepth: number; nearBubble: boolean
 }) {
-  const { levelIndex, playersLeft, heroStack, totalHands,
+  const { levelIndex, playersLeft, heroStack, heroStackBefore, totalHands,
     sessionScore, sessionMaxScore, streetResults } = state
   const handNum = totalHands + 1
   const scorePct = sessionMaxScore > 0 ? Math.round(sessionScore / sessionMaxScore * 100) : 0
@@ -511,9 +511,11 @@ function LeftPanel({ state, bb, sb, ante, day, bbDepth, nearBubble }: {
           </div>
           <div className="mt-2 pt-2 border-t border-[#30363d] flex justify-between text-[10px]">
             <span className="text-[#8b949e]">Net this hand</span>
-            <span className={`font-bold ${streetResults.reduce((s, r) => s + r.chipDelta, 0) >= 0 ? 'text-[#3fb950]' : 'text-[#f85149]'}`}>
-              {(() => { const t = streetResults.reduce((s, r) => s + r.chipDelta, 0); return (t > 0 ? '+' : '') + fmtF(t) })()}
-            </span>
+            {(() => { const net = heroStack - heroStackBefore; return (
+              <span className={`font-bold ${net > 0 ? 'text-[#3fb950]' : net < 0 ? 'text-[#f85149]' : 'text-[#484f58]'}`}>
+                {net > 0 ? '+' : ''}{fmtF(net)}
+              </span>
+            ) })()}
           </div>
         </div>
       )}
@@ -657,7 +659,7 @@ export default function GamePage() {
 
   const {
     phase, engine, streetResults, lastOption, lastChipDelta, lastDecision,
-    heroStack, levelIndex, playersLeft, sessionScore, sessionMaxScore,
+    heroStack, heroStackBefore, levelIndex, playersLeft, sessionScore, sessionMaxScore,
     guessOptions, guessCorrect, totalHands, heroSeatIndex,
   } = state
 
@@ -959,7 +961,7 @@ export default function GamePage() {
   }
 
   if (phase === 'recap') {
-    const total = streetResults.reduce((s, r) => s + r.chipDelta, 0)
+    const total = heroStack - heroStackBefore
     const heroCards = engine.heroSeat.holeCards
     return (
       <div className="h-screen flex flex-col max-w-lg mx-auto lg:max-w-2xl" style={{ background: '#0d1117' }}>
@@ -1010,8 +1012,8 @@ export default function GamePage() {
             ))}
             <div className="flex justify-between mt-3 pt-3 border-t border-[#30363d]">
               <span className="text-[#8b949e] text-xs">Net this hand</span>
-              <span className={`font-bold font-['Syne'] ${total >= 0 ? 'text-[#3fb950]' : 'text-[#f85149]'}`}>
-                {total >= 0 ? '+' : ''}{fmtF(total)}
+              <span className={`font-bold font-['Syne'] ${total > 0 ? 'text-[#3fb950]' : total < 0 ? 'text-[#f85149]' : 'text-[#484f58]'}`}>
+                {total > 0 ? '+' : ''}{fmtF(total)}
               </span>
             </div>
           </div>
