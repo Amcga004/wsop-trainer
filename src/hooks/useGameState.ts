@@ -180,14 +180,19 @@ export function useGameState(initialMode: SessionMode = 'full') {
       const fresh = makeInitialState(mode)
       const btn = getDealerButtonForHand(0, fresh.heroSeatIndex)
       const finalEngine = createHand(assignPositions(fresh.tableSeats, btn), fresh.heroSeatIndex, fresh.levelIndex, fresh.playersLeft)
+      const stackBefore = finalEngine.heroSeat.stack
+      if (finalEngine.isOver) {
+        finalEngine.heroSeat.stack += finalEngine.pot
+        finalEngine.pot = 0
+      }
       return {
         ...fresh,
-        phase:        'playing',
+        phase:        finalEngine.isOver ? 'recap' : 'playing',
         tournamentId,
         dealerButton: btn,
         engine:       finalEngine,
         heroStack:    finalEngine.heroSeat.stack,
-        heroStackBefore: finalEngine.heroSeat.stack,
+        heroStackBefore: stackBefore,
       }
     })
   }, [])
@@ -566,6 +571,11 @@ export function useGameState(initialMode: SessionMode = 'full') {
 
       const btn = newDealerButton
       const finalEngine = createHand(assignPositions(updatedTableSeats, btn), prev.heroSeatIndex, prev.levelIndex, newPlayersLeft)
+      const stackBefore2 = finalEngine.heroSeat.stack
+      if (finalEngine.isOver) {
+        finalEngine.heroSeat.stack += finalEngine.pot
+        finalEngine.pot = 0
+      }
 
       return {
         ...prev,
@@ -576,13 +586,13 @@ export function useGameState(initialMode: SessionMode = 'full') {
         handInLevel:     newHandInLevel,
         playersLeft:     newPlayersLeft,
         heroStack:       finalEngine.heroSeat.stack,
-        heroStackBefore: finalEngine.heroSeat.stack,
+        heroStackBefore: stackBefore2,
         streetResults:   [],
         lastOption:      null,
         lastChipDelta:   0,
         guessOptions:    [],
         guessCorrect:    '',
-        phase:           'playing',
+        phase:           finalEngine.isOver ? 'recap' : 'playing',
       }
     })
   }, [])
@@ -601,16 +611,21 @@ export function useGameState(initialMode: SessionMode = 'full') {
         btn = (btn + 1) % 9
         finalEngine = createHand(assignPositions(updatedTableSeats, btn), prev.heroSeatIndex, prev.levelIndex, prev.playersLeft)
       }
+      const stackBefore3 = finalEngine.heroSeat.stack
+      if (finalEngine.isOver) {
+        finalEngine.heroSeat.stack += finalEngine.pot
+        finalEngine.pot = 0
+      }
       return {
         ...prev,
         engine:          finalEngine,
         tableSeats:      updatedTableSeats,
         dealerButton:    btn,
         heroStack:       finalEngine.heroSeat.stack,
-        heroStackBefore: finalEngine.heroSeat.stack,
+        heroStackBefore: stackBefore3,
         streetResults:   [],
         lastOption:      null,
-        phase:           'playing',
+        phase:           finalEngine.isOver ? 'recap' : 'playing',
       }
     })
   }, [])

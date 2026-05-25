@@ -61,23 +61,16 @@ function QBadge({ q, small }: { q: string; small?: boolean }) {
 }
 
 // ── Bet Chip ──────────────────────────────────────────────────
-function BetChip({ amount, angle, tableW, tableH, compact }: {
+function BetChip({ amount, leftPct, topPct, compact }: {
   amount: number
-  angle: number
-  tableW: number
-  tableH: number
+  leftPct: number
+  topPct: number
   compact: boolean
 }) {
-  const rad = (angle - 90) * (Math.PI / 180)
-  const rx = tableW * (compact ? 0.20 : 0.22)
-  const ry = tableH * (compact ? 0.20 : 0.22)
-  const cx = tableW / 2 + rx * Math.cos(rad)
-  const cy = tableH / 2 + ry * Math.sin(rad)
-  const chipSize = compact ? 20 : 26
-
+  const chipSize = compact ? 16 : 20
   return (
     <div className="absolute flex flex-col items-center"
-      style={{ left: cx, top: cy, transform: 'translate(-50%, -50%)', zIndex: 25 }}>
+      style={{ left: `${leftPct}%`, top: `${topPct}%`, transform: 'translate(-50%, -50%)', zIndex: 25 }}>
       <div className="rounded-full border-2 flex items-center justify-center"
         style={{
           width: chipSize, height: chipSize,
@@ -93,7 +86,7 @@ function BetChip({ amount, angle, tableW, tableH, compact }: {
           }} />
       </div>
       <div className="text-[#d4a843] font-bold font-mono mt-0.5"
-        style={{ fontSize: compact ? 8 : 10 }}>
+        style={{ fontSize: compact ? 7 : 9 }}>
         {amount.toLocaleString()}
       </div>
     </div>
@@ -109,8 +102,6 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
   const seats = engine.seats
   const heroSeat = seats[heroSeatIndex]
   const height = compact ? 180 : 340
-  const tableW = compact ? 320 : 600  // nominal widths matching typical render
-  const tableH = height
 
   const ellipsePositions = [
     { top: '88%', left: '50%' },
@@ -124,11 +115,11 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
     { top: '74%', left: '18%' },
   ]
 
-  // Compute angle (north=0, clockwise) from each ellipse position
-  const seatAngles = ellipsePositions.map(p => {
-    const dx = parseFloat(p.left) - 50
-    const dy = parseFloat(p.top) - 50
-    return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360
+  // Bet chip % coords: interpolate 40% from seat toward table center
+  const betChipPositions = ellipsePositions.map(p => {
+    const sL = parseFloat(p.left)
+    const sT = parseFloat(p.top)
+    return { leftPct: sL + (50 - sL) * 0.40, topPct: sT + (50 - sT) * 0.40 }
   })
 
   const ACTION_ORDER = ['UTG', 'UTG1', 'UTG2', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB']
@@ -187,7 +178,7 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
 
       {/* Center: Pot + board */}
       <div className="absolute z-10 flex flex-col items-center gap-1"
-        style={{ top: '34%', left: '50%', transform: 'translate(-50%, -50%)' }}>
+        style={{ top: '28%', left: '50%', transform: 'translate(-50%, -50%)' }}>
         <div className="text-[#d4a843] font-['Syne'] font-bold tracking-wide flex items-center gap-1.5"
           style={{ fontSize: compact ? 9 : 13 }}>
           <div className="flex flex-col -space-y-1">
@@ -289,13 +280,13 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
       {orderedSeats.map((seat, posIdx) => {
         if (seat.invested <= 0) return null
         if (seat.folded) return null
+        const { leftPct, topPct } = betChipPositions[posIdx]
         return (
           <BetChip
             key={`bet-${seat.seatIndex}`}
             amount={seat.invested}
-            angle={seatAngles[posIdx]}
-            tableW={tableW}
-            tableH={tableH}
+            leftPct={leftPct}
+            topPct={topPct}
             compact={compact}
           />
         )
@@ -1056,6 +1047,11 @@ export default function GamePage() {
             {engine.board.length > 0 && (
               <div className="flex gap-1 mb-3">
                 {engine.board.map((c, i) => <Card key={i} r={c.r} s={c.s} size="sm" />)}
+              </div>
+            )}
+            {streetResults.length === 0 && (
+              <div className="text-[#8b949e] text-[11px] leading-relaxed py-2">
+                Everyone folded. BB wins the pot uncontested.
               </div>
             )}
             {streetResults.map((r, i) => (

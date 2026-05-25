@@ -1179,7 +1179,7 @@ function generateHeroOptions(
     // ── SCENARIO: BB CHECK or RAISE ─────────────────────
     else if (heroSeat.position === 'BB' && raisers === 0) {
       options.push({
-        label: limpers > 0 ? 'Check (iso opportunity)' : 'Check — take free flop',
+        label: limpers > 0 ? 'Check (iso opportunity)' : 'Check — free flop',
         type: 'check',
         amount: 0,
         chipCost: 0,
@@ -1377,6 +1377,7 @@ function generateHeroOptions(
   const texture = board.length >= 3 ? classifyBoardTexture(board) : 'dry'
   const isDry = texture === 'dry'
   const isWet = !isDry
+  const isMonotone = texture === 'monotone'
   const texStrat = BOARD_TEXTURE[texture]
   const nearBubbleNote = nearBubble ? ' ICM pressure: avoid marginal spots.' : ''
 
@@ -1457,7 +1458,11 @@ function generateHeroOptions(
   const heroIsAggressor = heroRaisedPreflop || (streetHistory?.some(
     s => s.street !== 'preflop' && s.heroAction.toLowerCase().includes('bet')
   ) ?? false)
-  const heroRangeAdv = calcRangeAdvantage(heroSeat.position, board, heroIsAggressor)
+  const heroRangeAdv = (hs?.heroFD)
+    ? calcRangeAdvantage(heroSeat.position, board, heroIsAggressor)
+    : isMonotone
+    ? 0
+    : calcRangeAdvantage(heroSeat.position, board, heroIsAggressor)
   const heroNutAdv   = calcNutAdvantage(heroSeat.position, board, heroIsAggressor)
   const rangeContext = heroRangeAdv >= 3
     ? ' Your range connects strongly with this board.'
@@ -1478,8 +1483,16 @@ function generateHeroOptions(
       street === 'river' && !isIP && isWet &&
       hs !== null && hs.str === 1 &&
       (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')
+    const heroPostflopIdx = POSTFLOP_ORDER.indexOf(heroSeat.position)
+    const playersActingAfterHero = activeSeats?.filter(
+      s => !s.folded &&
+      s.seatIndex !== heroSeat.seatIndex &&
+      POSTFLOP_ORDER.indexOf(s.position) > heroPostflopIdx
+    ).length ?? 0
     const foldQuality: Quality =
       riverVulnerableOOP ? 'best' :
+      (playersActingAfterHero > 0 && hs !== null && hs.str === 1 &&
+       hs.pairPos !== 'toppair' && hs.pairPos !== 'overpair' && potOdds > 0.25) ? 'best' :
       (hs && (hs.str >= 3 || hs.str >= 2)) ? 'bad' :
       (hs && hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')) ? 'bad' :
       (hs && hs.heroNFD && hs.oesd) ? 'bad' :
@@ -1585,6 +1598,7 @@ function generateHeroOptions(
     isIPFreeShowdownSpot ? 'best' :
     isBlockerBetSpot ? 'good' :
     (heroRangeAdv === 0 && heroNutAdv === 0) ? 'best' :
+    (activePlayers >= 3 && isMonotone && hs !== null && !hs.heroFD) ? 'best' :
     villainRaisedLastStreet ? 'best' :
     (villainStrong && hs && hs.str < 3) ? 'best' :
     (villainStrong && hs && hs.str >= 5) ? 'ok' :
@@ -1640,6 +1654,7 @@ function generateHeroOptions(
 
   const betQuality = (hs: HandResult | null, sizing: 'sm' | 'med' | 'lg'): Quality => {
     if (!hs) return 'ok'
+    if (activePlayers >= 3 && isMonotone && !hs.heroFD) return 'bad'
     if (isBlockerBetSpot) {
       if (sizing === 'sm') return 'best'
       return 'bad'
@@ -1909,7 +1924,7 @@ function runPreflopToHero(
   engine: HandEngine,
   levelIndex: number,
   playersLeft: number,
-): HeroDecision {
+): HeroDecision | null {
   const bb = getBB(levelIndex)
   const sb = getSB(levelIndex)
   const heroPos = engine.heroSeat.position
@@ -1988,6 +2003,19 @@ function runPreflopToHero(
     }
   }
   updatePrimaryVillain(engine)
+
+  // BB wins uncontested: every other player folded before BB acts
+  const activeAfterVillains = engine.activeSeats.filter(s => !s.folded)
+  if (
+    activeAfterVillains.length === 1 &&
+    activeAfterVillains[0].seatIndex === engine.heroSeat.seatIndex &&
+    engine.heroSeat.position === 'BB'
+  ) {
+    engine.isOver = true
+    engine.heroWon = true
+    engine.currentDecision = null
+    return null
+  }
 
   // Continue action after hero (BB, or remaining players if hero is early)
   // This is simplified — remaining villains after hero will be resolved in processHeroAction
@@ -2222,27 +2250,21 @@ export function processHeroAction(
     }
   }
 
-  // Only one player remains — hand over
   const stillIn = engine.activeSeats.filter(s => !s.folded)
-  if (stillIn.length === 1) {
+  if (stillIn.length <= 1) {
     engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
     engine.isOver = true
-    engine.heroWon = stillIn[0].seatIndex === heroSeat.seatIndex
-    if (!engine.heroWon) engine.showdownSeat = stillIn[0]
+    engine.heroWon = stillIn[0]?.seatIndex === heroSeat.seatIndex
+    if (!engine.heroWon) engine.showdownSeat = stillIn[0] ?? null
     return null
-  }
-
-  // All-in runout or river showdown — advance immediately (no pause)
-  const canAct = stillIn.filter(s => !s.allIn)
-  if (canAct.length <= 1 || engine.street === 'river') {
+  } else if (engine.street !== 'river') {
+    engine.pendingAdvance = true
+    engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
+    engine.currentDecision = null
+    return null
+  } else {
     return advanceStreet(engine, actionLines, levelIndex, playersLeft)
   }
-
-  // Street done, hand continues — pause for user to click to deal next card
-  engine.pendingAdvance = true
-  engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
-  engine.currentDecision = null
-  return null
 }
 
 export function advanceToNextStreet(
