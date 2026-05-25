@@ -73,7 +73,7 @@ export interface GameState {
   lastDecision:     HeroDecision | null
 
   // Villain guess state
-  guessOptions:     string[]   // 4 hand strings to guess from
+  guessOptions:     string[]   // 6 hand strings to guess from
   guessCorrect:     string     // the actual villain hand string
 
   // Scoring
@@ -131,15 +131,12 @@ function toHandNotation(c1r: string, c2r: string, suited: boolean): string {
   return `${hi}${lo}${suited ? 's' : 'o'}`
 }
 
-function generatePlausibleWrongAnswers(correct: string, count = 3): string[] {
-  const combos = [
-    'AKs','AQs','AJs','ATs','A9s','A8s','A5s','A4s','A3s','A2s',
-    'AKo','AQo','AJo','ATo','KQs','KJs','KTs','KQo','KJo',
-    'QJs','QTs','QJo','JTs','JTo','T9s','T9o','98s','87s','76s','65s','54s',
-    'KK','QQ','JJ','TT','99','88','77','66','55','44','33','22',
-  ]
-  const pool = combos.filter(h => h !== correct)
-  return pool.sort(() => Math.random() - 0.5).slice(0, count)
+const HAND_TIERS = {
+  premium:    ['AA','KK','QQ','JJ','AKs','AKo'],
+  strong:     ['TT','99','AQs','AJs','KQs','AQo'],
+  medium:     ['88','77','ATs','A9s','KJs','KTs','QJs','JTs','AJo','KQo'],
+  speculative:['66','55','44','A8s','A7s','A5s','A4s','KJo','QJo','T9s','98s','87s','76s'],
+  bluff:      ['33','22','A3s','A2s','K9s','Q9s','J9s','T8s','97s','86s','75s','65s','54s'],
 }
 
 function buildGuessOptions(engine: HandEngine): { options: string[]; correct: string } {
@@ -149,9 +146,43 @@ function buildGuessOptions(engine: HandEngine): { options: string[]; correct: st
   const [c1, c2] = villain.holeCards
   const correct = toHandNotation(c1.r, c2.r, c1.s === c2.s)
 
-  const decoys = generatePlausibleWrongAnswers(correct, 3)
-  const options = [...decoys, correct].sort(() => Math.random() - 0.5)
-  return { options, correct }
+  const vs = engine.primaryVillain?.rangeStrength ?? 5
+
+  // Determine which tiers are likely based on villain range strength
+  const likelyPool   = vs >= 8 ? [...HAND_TIERS.premium, ...HAND_TIERS.strong]
+                     : vs >= 6 ? [...HAND_TIERS.strong, ...HAND_TIERS.medium]
+                     : vs >= 4 ? [...HAND_TIERS.medium, ...HAND_TIERS.speculative]
+                     : [...HAND_TIERS.speculative, ...HAND_TIERS.bluff]
+  const possiblePool = vs >= 6 ? [...HAND_TIERS.medium]
+                     : [...HAND_TIERS.strong, ...HAND_TIERS.medium]
+  const unlikelyPool = vs >= 6 ? [...HAND_TIERS.speculative, ...HAND_TIERS.bluff]
+                     : [...HAND_TIERS.premium, ...HAND_TIERS.bluff]
+
+  function pickFrom(pool: string[], exclude: string[], n: number): string[] {
+    return pool.filter(h => !exclude.includes(h)).sort(() => Math.random() - 0.5).slice(0, n)
+  }
+
+  const chosen: string[] = [correct]
+  chosen.push(...pickFrom(likelyPool, chosen, 2))
+  chosen.push(...pickFrom(possiblePool, chosen, 2))
+  chosen.push(...pickFrom(unlikelyPool, chosen, 1))
+
+  // Pad to 6 with fallback if pools were too small
+  const fallback = ['AKo','QJs','TT','87s','AQs','KK','99','JTs','A5s','66','AJo','KQo']
+  while (chosen.length < 6) {
+    const fb = fallback.find(h => !chosen.includes(h))
+    if (fb) chosen.push(fb)
+    else break
+  }
+
+  // Shuffle
+  const shuffled = chosen.slice(0, 6)
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+
+  return { options: shuffled, correct }
 }
 
 function isTrivialFold(engine: HandEngine): boolean {

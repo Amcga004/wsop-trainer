@@ -1100,26 +1100,75 @@ export default function GamePage() {
   }
 
   if (phase === 'villain_guess') {
+    const ACTION_LABELS: Record<string, string> = {
+      fold: 'Fold', limp: 'Limp', call: 'Call', rfi: 'Raised',
+      '3bet': '3-Bet', '4bet': '4-Bet', shove: 'Shoved',
+      b: 'Bet', x: 'Check', c: 'Call', r: 'Raise', f: 'Fold',
+      xc: 'Check-Call', xr: 'Check-Raise', xf: 'Check-Fold',
+    }
+    const STREET_LABELS = ['Preflop', 'Flop', 'Turn', 'River']
+
+    function handToCards(handStr: string): { r: string; s: string }[] {
+      if (handStr.length < 2) return []
+      const suits = ['s', 'h', 'd', 'c']
+      if (handStr.length === 2) {
+        return [{ r: handStr[0], s: 's' }, { r: handStr[1], s: 'h' }]
+      }
+      const r1 = handStr[0]
+      const r2 = handStr[1]
+      const suited = handStr.endsWith('s')
+      const s1 = suits[Math.floor(Math.random() * 4)]
+      if (suited) {
+        return [{ r: r1, s: s1 }, { r: r2, s: s1 }]
+      }
+      const s2 = suits.find(s => s !== s1) ?? 'h'
+      return [{ r: r1, s: s1 }, { r: r2, s: s2 }]
+    }
+
     return (
       <div className="h-screen flex flex-col max-w-lg mx-auto" style={{ background: '#0d1117' }}>
         <MobileHeader /><MobileStatusBar />
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           <div className="border border-[#1f6feb]/25 rounded-xl p-4" style={{ background: '#161b22' }}>
-            <div className="text-[#1f6feb] font-['Syne'] font-bold mb-1">🎯 What's their hand?</div>
-            <div className="text-[#484f58] text-xs mb-4">Based on their line through the hand</div>
+            <div className="text-[#1f6feb] font-['Syne'] font-bold mb-1">What&apos;s their hand?</div>
             {engine.board.length > 0 && (
-              <div className="flex gap-1 mb-4">
+              <div className="flex gap-1 mb-3">
                 {engine.board.map((c, i) => <Card key={i} r={c.r} s={c.s} size="sm" />)}
               </div>
             )}
-            <div className="grid grid-cols-2 gap-3">
-              {guessOptions.map((opt, i) => (
-                <button key={i} onClick={() => submitGuess(opt)}
-                  className="py-3 px-2 rounded-xl text-[#1f6feb] font-mono text-sm text-center active:scale-[0.97] transition-transform"
-                  style={{ border: '1px solid rgba(31,111,235,0.30)', background: 'rgba(31,111,235,0.08)' }}>
-                  {opt}
-                </button>
-              ))}
+            {engine.primaryVillain && engine.primaryVillain.actionSequence.length > 0 && (
+              <div className="mb-4 p-3 rounded-xl border border-[#30363d]"
+                style={{ background: '#0d1117' }}>
+                <div className="text-[#484f58] text-[9px] uppercase tracking-widest font-['Syne'] mb-2">Their Line</div>
+                <div className="flex gap-3 flex-wrap mb-1.5">
+                  {engine.primaryVillain.actionSequence.map((action, i) => (
+                    <div key={i} className="flex flex-col items-center">
+                      <div className="text-[#484f58] text-[8px]">{STREET_LABELS[i] ?? ''}</div>
+                      <div className="text-[#d4a843] text-[11px] font-bold font-mono">
+                        {ACTION_LABELS[action] ?? action}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[#484f58] text-[9px] italic leading-tight">
+                  {engine.primaryVillain.rangeNarrow}
+                </div>
+              </div>
+            )}
+            <div className="text-[#484f58] text-[9px] uppercase tracking-widest font-['Syne'] mb-2">
+              Put them on a hand
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {guessOptions.map((opt, i) => {
+                const cards = handToCards(opt)
+                return (
+                  <button key={i} onClick={() => submitGuess(opt)}
+                    className="flex items-center justify-center gap-2 py-3 px-2 rounded-xl active:scale-[0.97] transition-transform"
+                    style={{ border: '1px solid rgba(31,111,235,0.30)', background: 'rgba(31,111,235,0.08)' }}>
+                    {cards.map((c, j) => <Card key={j} r={c.r} s={c.s} size="sm" />)}
+                  </button>
+                )
+              })}
             </div>
           </div>
         </div>

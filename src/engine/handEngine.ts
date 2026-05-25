@@ -1240,6 +1240,17 @@ function generateHeroOptions(
             ? `Good call. ${heroHandStr} is in your calling range.`
             : `Calling ${heroHandStr} here leaks chips. Fold or 3-bet.`,
         })
+      } else if (callCost >= heroSeat.stack && callCost > 0) {
+        options.push({
+          label: `Call All-In ${heroSeat.stack.toLocaleString()}`,
+          type: 'shove',
+          amount: heroSeat.stack,
+          chipCost: heroSeat.stack,
+          quality: (inCall && in3bet) ? 'good' : inCall ? 'best' : 'bad',
+          coaching: inCall
+            ? `Calling all-in with ${heroHandStr}. You have the equity to get it in.`
+            : `Calling all-in with ${heroHandStr} leaks chips. Fold if possible.`,
+        })
       }
 
       // 3. 3-BET STANDARD
@@ -1272,8 +1283,8 @@ function generateHeroOptions(
         })
       }
 
-      // SHOVE when short or 3-bet commits stack
-      if (depth < 20 || threeBetCommitsStack) {
+      // SHOVE when short or 3-bet commits stack (only when call is not already all-in)
+      if ((depth < 20 || threeBetCommitsStack) && callCost < heroSeat.stack) {
         options.push({
           label: `Shove ${heroSeat.stack.toLocaleString()}`,
           type: 'shove',
@@ -1315,6 +1326,17 @@ function generateHeroOptions(
             ? `${heroHandStr} is in your vs-3bet calling range. Good call.`
             : `Calling ${heroHandStr} vs a 3-bet leaks chips. Fold.`,
         })
+      } else if (callCost >= heroSeat.stack && callCost > 0) {
+        options.push({
+          label: `Call All-In ${heroSeat.stack.toLocaleString()}`,
+          type: 'shove',
+          amount: heroSeat.stack,
+          chipCost: heroSeat.stack,
+          quality: inVs3bet ? 'best' : 'bad',
+          coaching: inVs3bet
+            ? `Calling all-in with ${heroHandStr} vs the 3-bet. You're committed.`
+            : `Calling all-in with ${heroHandStr} vs a 3-bet leaks chips.`,
+        })
       }
 
       // 3. 4-BET STANDARD
@@ -1329,17 +1351,19 @@ function generateHeroOptions(
         })
       }
 
-      // 4. SHOVE
-      options.push({
-        label: `Shove ${heroSeat.stack.toLocaleString()}`,
-        type: 'shove',
-        amount: heroSeat.stack,
-        chipCost: heroSeat.stack,
-        quality: in4bet ? (depth < 25 ? 'best' : 'good') : inVs3bet ? 'ok' : 'bad',
-        coaching: in4bet
-          ? `Shoving ${heroHandStr} facing a 3-bet. Maximum pressure.`
-          : `Shoving ${heroHandStr} is too aggressive here. 4-bet smaller or call.`,
-      })
+      // 4. SHOVE (only when call is not already all-in)
+      if (callCost < heroSeat.stack) {
+        options.push({
+          label: `Shove ${heroSeat.stack.toLocaleString()}`,
+          type: 'shove',
+          amount: heroSeat.stack,
+          chipCost: heroSeat.stack,
+          quality: in4bet ? (depth < 25 ? 'best' : 'good') : inVs3bet ? 'ok' : 'bad',
+          coaching: in4bet
+            ? `Shoving ${heroHandStr} facing a 3-bet. Maximum pressure.`
+            : `Shoving ${heroHandStr} is too aggressive here. 4-bet smaller or call.`,
+        })
+      }
     }
 
     // ── SCENARIO: FACING 4-BET+ ──────────────────────────
@@ -2257,7 +2281,47 @@ export function processHeroAction(
     engine.heroWon = stillIn[0]?.seatIndex === heroSeat.seatIndex
     if (!engine.heroWon) engine.showdownSeat = stillIn[0] ?? null
     return null
-  } else if (engine.street !== 'river') {
+  }
+
+  // All players all-in — run out remaining board cards without further user interaction
+  if (stillIn.length >= 2 && stillIn.every(s => s.allIn)) {
+    while (engine.board.length < 5) {
+      if (engine.board.length === 0) {
+        engine.board.push(engine.deck.shift()!, engine.deck.shift()!, engine.deck.shift()!)
+      } else {
+        engine.board.push(engine.deck.shift()!)
+      }
+    }
+    engine.street = 'river'
+    engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
+    engine.isOver = true
+    let allInWin = true
+    let allInShowdownSeat: Seat | null = null
+    let allInTieCount = 0
+    for (const seat of stillIn) {
+      if (seat.seatIndex === heroSeat.seatIndex) continue
+      if (seat.holeCards) {
+        const cmp = compareHands(
+          heroSeat.holeCards![0], heroSeat.holeCards![1],
+          seat.holeCards[0], seat.holeCards[1],
+          engine.board
+        )
+        if (cmp.tie) { allInTieCount++ }
+        else if (!cmp.heroWins) { allInWin = false; allInShowdownSeat = seat }
+      }
+    }
+    if (!allInWin && allInTieCount > 0 && allInShowdownSeat === null) {
+      engine.heroWon = true
+      engine.isTie = true
+      engine.showdownSeat = stillIn.find(s => s.seatIndex !== heroSeat.seatIndex) ?? null
+    } else {
+      engine.heroWon = allInWin
+      engine.showdownSeat = allInShowdownSeat ?? stillIn.find(s => s.seatIndex !== heroSeat.seatIndex) ?? null
+    }
+    return null
+  }
+
+  if (engine.street !== 'river') {
     engine.pendingAdvance = true
     engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
     engine.currentDecision = null
@@ -2274,6 +2338,45 @@ export function advanceToNextStreet(
 ): HeroDecision | null {
   engine.pendingAdvance = false
   engine.pendingStreetDesc = ''
+
+  const activeNow = engine.activeSeats.filter(s => !s.folded)
+  if (activeNow.length >= 2 && activeNow.every(s => s.allIn)) {
+    const heroSeat = engine.heroSeat
+    while (engine.board.length < 5) {
+      if (engine.board.length === 0) {
+        engine.board.push(engine.deck.shift()!, engine.deck.shift()!, engine.deck.shift()!)
+      } else {
+        engine.board.push(engine.deck.shift()!)
+      }
+    }
+    engine.street = 'river'
+    engine.isOver = true
+    let aiWin = true
+    let aiShowdownSeat: Seat | null = null
+    let aiTieCount = 0
+    for (const seat of activeNow) {
+      if (seat.seatIndex === heroSeat.seatIndex) continue
+      if (seat.holeCards) {
+        const cmp = compareHands(
+          heroSeat.holeCards![0], heroSeat.holeCards![1],
+          seat.holeCards[0], seat.holeCards[1],
+          engine.board
+        )
+        if (cmp.tie) { aiTieCount++ }
+        else if (!cmp.heroWins) { aiWin = false; aiShowdownSeat = seat }
+      }
+    }
+    if (!aiWin && aiTieCount > 0 && aiShowdownSeat === null) {
+      engine.heroWon = true
+      engine.isTie = true
+      engine.showdownSeat = activeNow.find(s => s.seatIndex !== heroSeat.seatIndex) ?? null
+    } else {
+      engine.heroWon = aiWin
+      engine.showdownSeat = aiShowdownSeat ?? activeNow.find(s => s.seatIndex !== heroSeat.seatIndex) ?? null
+    }
+    return null
+  }
+
   return advanceStreet(engine, [], levelIndex, playersLeft)
 }
 
