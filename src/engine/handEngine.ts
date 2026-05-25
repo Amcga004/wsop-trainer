@@ -1482,6 +1482,16 @@ function generateHeroOptions(
       return RV[c.r] > (hs?.pairVal ?? 0)
     })
 
+  // Four-flush board detection
+  const boardSuitCounts: Record<string, number> = {}
+  board.forEach(c => { boardSuitCounts[c.s] = (boardSuitCounts[c.s] || 0) + 1 })
+  const dominantSuit = Object.entries(boardSuitCounts).sort((a, b) => b[1] - a[1])[0] ?? null
+  const isFourFlushBoard = dominantSuit !== null && dominantSuit[1] >= 4
+  const heroHasDominantSuit = isFourFlushBoard &&
+    (heroSeat.holeCards?.[0]?.s === dominantSuit[0] ||
+     heroSeat.holeCards?.[1]?.s === dominantSuit[0])
+  const handDangerous = isFourFlushBoard && !heroHasDominantSuit && hs !== null && hs.str <= 2
+
   // Blocker bet spot: OOP river, vulnerable made hand, wet board, villain known
   const isBlockerBetSpot =
     street === 'river' &&
@@ -1539,11 +1549,14 @@ function generateHeroOptions(
       POSTFLOP_ORDER.indexOf(s.position) > heroPostflopIdx
     ).length ?? 0
     const foldQuality: Quality =
+      (street === 'river' && currentBet > 0 && handDangerous && hs !== null && hs.str <= 2) ? 'best' :
+      (street === 'river' && currentBet > 0 && villainStrong && hs !== null && hs.str <= 1) ? 'best' :
       riverVulnerableOOP ? 'best' :
       (playersActingAfterHero > 0 && hs !== null && hs.str === 1 &&
        hs.pairPos !== 'toppair' && hs.pairPos !== 'overpair' && potOdds > 0.25) ? 'best' :
-      (hs && (hs.str >= 3 || hs.str >= 2)) ? 'bad' :
-      (hs && hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')) ? 'bad' :
+      (hs && hs.str >= 2 && !(street === 'river' && currentBet > 0 && handDangerous)) ? 'bad' :
+      (hs && hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair') &&
+       !(street === 'river' && currentBet > 0 && villainStrong)) ? 'bad' :
       (hs && hs.heroNFD && hs.oesd) ? 'bad' :
       (hs && (hs.heroNFD || (hs.heroFD && potOdds < 0.30))) ? 'ok' :
       (hs && hs.oesd && potOdds < 0.35) ? 'ok' :
@@ -1557,15 +1570,21 @@ function generateHeroOptions(
       quality: foldQuality,
       coaching: riverVulnerableOOP
         ? `Correct fold. You bet small as a blocker — villain's raise means they have you beat. This is the point of the blocker bet: define cheaply and fold to strength.`
+        : (street === 'river' && currentBet > 0 && handDangerous)
+        ? `Correct fold. Four ${dominantSuit?.[0] ?? ''} on the board and you don't hold one — villain's river bet almost always represents a flush. Your ${hs?.label ?? 'hand'} loses to all flushes here.`
+        : (street === 'river' && currentBet > 0 && villainStrong && hs && hs.str <= 1)
+        ? `Correct fold. Villain's aggressive line represents a strong hand. One pair rarely wins against a river bet from this range.`
         : foldQuality === 'best'
-        ? `Correct fold. ${hs?.label || 'Your hand'} has no equity here.${nearBubbleNote}`
+        ? `Correct fold. ${hs?.label || 'Your hand'} doesn't have enough to continue here.${nearBubbleNote}`
         : foldQuality === 'bad'
-        ? `Don't give up ${hs?.label || 'this hand'}. You have too much equity to fold.`
+        ? `Don't give up ${hs?.label || 'this hand'}. You have too much to fold here.`
+        : street === 'river'
+        ? `Marginal spot. Pot odds ${Math.round(potOdds * 100)}% — no draws remain, you're at showdown.`
         : `Marginal spot. Pot odds ${Math.round(potOdds * 100)}% — consider your draws before folding.`,
     })
 
     // Call (potOdds already defined above)
-    const callQuality: Quality =
+    const baseCallQuality: Quality =
       villainStrong && hs && hs.str >= 3 ? 'best' :
       villainStrong && hs && hs.str === 2 ? 'good' :
       villainStrong && hs && hs.str <= 1 ? 'bad' :
@@ -1575,15 +1594,35 @@ function generateHeroOptions(
       hs && (hs.heroFD || hs.oesd) && potOdds < 0.33 ? 'best' :
       hs && hs.str === 1 && hs.pairPos === 'toppair' ? 'best' :
       hs && hs.str === 1 ? 'ok' : 'bad'
+    const riverCallQuality: Quality =
+      (hs && hs.str >= 4 && !handDangerous) ? 'best' :
+      (hs && hs.str === 3 && !handDangerous) ? 'good' :
+      (handDangerous && hs && hs.str <= 2) ? 'bad' :
+      (hs && hs.str === 2 && !villainStrong) ? 'ok' :
+      (hs && hs.str === 2 && villainStrong) ? 'bad' :
+      (hs && hs.str === 1 && potOdds < 0.20 && !villainStrong) ? 'ok' :
+      'bad'
+    const callQuality: Quality = street === 'river' ? riverCallQuality : baseCallQuality
     const pfCallCost = Math.min(heroSeat.stack, currentBet)
     const pfCallIsAllIn = pfCallCost >= heroSeat.stack
+    const riverCallCoaching = riverCallQuality === 'best'
+      ? `Strong hand — call the river bet for value.${villainContext}`
+      : riverCallQuality === 'good'
+      ? `Decent hand — calling here is reasonable but risky.${villainContext}`
+      : riverCallQuality === 'ok'
+      ? `Marginal call. You're getting ${Math.round(potOdds * 100)}% pot odds but villain's river bet is usually strong.${villainContext}`
+      : handDangerous
+      ? `Fold. The board has four ${dominantSuit?.[0] ?? ''} and you don't hold one — villain's river bet almost always means a flush. Your ${hs?.label ?? 'hand'} loses here.`
+      : `Fold. Villain's river bet is rarely a bluff. You need a strong hand to continue.${villainContext}`
     options.push({
       label: pfCallIsAllIn ? `Call All-In ${pfCallCost.toLocaleString()}` : `Call ${currentBet.toLocaleString()}`,
       type: pfCallIsAllIn ? 'shove' : 'call',
       amount: pfCallCost,
       chipCost: pfCallCost,
       quality: callQuality,
-      coaching: callQuality === 'best'
+      coaching: street === 'river'
+        ? riverCallCoaching
+        : callQuality === 'best'
         ? `Good call. ${hs?.label || 'Your hand'} has the equity to continue.${villainContext}`
         : callQuality === 'ok'
         ? `Marginal call. You're getting reasonable odds but the hand is weak.${villainContext}`
@@ -1606,10 +1645,14 @@ function generateHeroOptions(
         coaching: raiseQuality === 'best'
           ? `Strong raise. ${hs?.label || 'Your hand'} — build the pot and apply pressure.`
           : raiseQuality === 'good'
-          ? `Good semi-bluff raise. Two ways to win — fold equity now or improving.`
+          ? street === 'river'
+            ? `Raising for value on the river.`
+            : `Good semi-bluff raise. Two ways to win — fold equity now or improving.`
           : raiseQuality === 'ok'
-          ? `Marginal raise. You have some equity but calling is safer.`
-          : `Raising here without equity is a bluff. Check your hand strength.`,
+          ? street === 'river'
+            ? `Marginal raise on the river — consider calling or folding instead.`
+            : `Marginal raise. You have some equity but calling is safer.`
+          : `Raising here is too thin. You need a stronger hand.`,
       })
     }
 
@@ -1646,6 +1689,8 @@ function generateHeroOptions(
   const checkQuality: Quality =
     isIPFreeShowdownSpot ? 'best' :
     isBlockerBetSpot ? 'good' :
+    (handDangerous && street === 'river') ? 'best' :
+    (handDangerous) ? 'good' :
     (heroRangeAdv === 0 && heroNutAdv === 0) ? 'best' :
     (activePlayers >= 3 && isMonotone && hs !== null && !hs.heroFD) ? 'best' :
     villainRaisedLastStreet ? 'best' :
@@ -1675,11 +1720,17 @@ function generateHeroOptions(
         ? `Check here — don't donk bet weak hands into the preflop raiser. Let them c-bet and react with your hand strength.`
         : heroRangeAdv === 0 && heroNutAdv === 0
         ? `Check — villain's range and nut advantage make betting dangerous here.${rangeContext}${nutContext}`
-        : `High card has little equity. Check and see a free card.`)
+        : handDangerous
+        ? `Check${street === 'river' ? ' to showdown' : ''}. The board has four ${dominantSuit?.[0] ?? ''} and you don't hold one — your ${hs?.label ?? 'hand'} is risky to bet.`
+        : street === 'river'
+        ? `Check to showdown. Your hand has showdown value but cannot improve.`
+        : `High card — check and see a free card.`)
       : checkQuality === 'bad'
       ? `Never slowplay ${hs?.label ?? 'this hand'} on the river. Bet for value — checking gives free showdowns.${villainContext}`
       : heroDonking
       ? `Checking is preferred OOP. You can lead the river when you have a clear value hand.`
+      : street === 'river'
+      ? `Check to showdown. Evaluate carefully before calling any river bet.${priorBetDesc}${villainContext}`
       : `Checking is fine for pot control.${nearBubble ? ' Near the bubble, pot control is especially important.' : ' Be ready to call a reasonable bet.'}${priorBetDesc}${villainContext}`,
   })
 
@@ -1703,6 +1754,15 @@ function generateHeroOptions(
 
   const betQuality = (hs: HandResult | null, sizing: 'sm' | 'med' | 'lg'): Quality => {
     if (!hs) return 'ok'
+    if (handDangerous && street === 'river') {
+      if (hs.str >= 5) return 'good'
+      return 'bad'
+    }
+    if (handDangerous) {
+      if (hs.str >= 3) return sizing === 'sm' ? 'best' : 'good'
+      if (hs.str === 2) return 'ok'
+      return 'bad'
+    }
     if (activePlayers >= 3 && isMonotone && !hs.heroFD) return 'bad'
     if (isBlockerBetSpot) {
       if (sizing === 'sm') return 'best'
@@ -1797,7 +1857,9 @@ function generateHeroOptions(
       amount: betLg,
       chipCost: betLg,
       quality: betQuality(hs, 'lg'),
-      coaching: `Large bet. Use this with strong hands that want to build the pot or strong draws charging a price.${villainContext}${rangeContext}${nutContext}`,
+      coaching: street === 'river'
+        ? `Large bet. Use this with strong value hands on the river — polarize your range.${villainContext}${rangeContext}${nutContext}`
+        : `Large bet. Use this with strong hands that want to build the pot or draws that charge a high price.${villainContext}${rangeContext}${nutContext}`,
     })
   }
 
