@@ -67,7 +67,7 @@ function BetChip({ amount, leftPct, topPct, compact }: {
   topPct: number
   compact: boolean
 }) {
-  const chipSize = compact ? 16 : 20
+  const chipSize = compact ? 14 : 18
   return (
     <div className="absolute flex flex-col items-center"
       style={{ left: `${leftPct}%`, top: `${topPct}%`, transform: 'translate(-50%, -50%)', zIndex: 25 }}>
@@ -86,7 +86,7 @@ function BetChip({ amount, leftPct, topPct, compact }: {
           }} />
       </div>
       <div className="text-[#d4a843] font-bold font-mono mt-0.5"
-        style={{ fontSize: compact ? 7 : 9 }}>
+        style={{ fontSize: compact ? 6 : 8 }}>
         {amount.toLocaleString()}
       </div>
     </div>
@@ -119,7 +119,7 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
   const betChipPositions = ellipsePositions.map(p => {
     const sL = parseFloat(p.left)
     const sT = parseFloat(p.top)
-    return { leftPct: sL + (50 - sL) * 0.40, topPct: sT + (50 - sT) * 0.40 }
+    return { leftPct: sL + (50 - sL) * 0.32, topPct: sT + (50 - sT) * 0.32 }
   })
 
   const ACTION_ORDER = ['UTG', 'UTG1', 'UTG2', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB']
@@ -178,7 +178,7 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
 
       {/* Center: Pot + board */}
       <div className="absolute z-10 flex flex-col items-center gap-1"
-        style={{ top: '28%', left: '50%', transform: 'translate(-50%, -50%)' }}>
+        style={{ top: '58%', left: '50%', transform: 'translate(-50%, -50%)' }}>
         <div className="text-[#d4a843] font-['Syne'] font-bold tracking-wide flex items-center gap-1.5"
           style={{ fontSize: compact ? 9 : 13 }}>
           <div className="flex flex-col -space-y-1">
