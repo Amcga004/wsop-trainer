@@ -1110,18 +1110,18 @@ export default function GamePage() {
 
     function handToCards(handStr: string): { r: string; s: string }[] {
       if (handStr.length < 2) return []
-      const suits = ['s', 'h', 'd', 'c']
+      const SUITS = ['♠', '♥', '♦', '♣']
       if (handStr.length === 2) {
-        return [{ r: handStr[0], s: 's' }, { r: handStr[1], s: 'h' }]
+        return [{ r: handStr[0], s: '♠' }, { r: handStr[1], s: '♥' }]
       }
       const r1 = handStr[0]
       const r2 = handStr[1]
       const suited = handStr.endsWith('s')
-      const s1 = suits[Math.floor(Math.random() * 4)]
+      const s1 = SUITS[Math.floor(Math.random() * 4)]
       if (suited) {
         return [{ r: r1, s: s1 }, { r: r2, s: s1 }]
       }
-      const s2 = suits.find(s => s !== s1) ?? 'h'
+      const s2 = SUITS.find(s => s !== s1) ?? '♥'
       return [{ r: r1, s: s1 }, { r: r2, s: s2 }]
     }
 
@@ -1163,9 +1163,9 @@ export default function GamePage() {
                 const cards = handToCards(opt)
                 return (
                   <button key={i} onClick={() => submitGuess(opt)}
-                    className="flex items-center justify-center gap-2 py-3 px-2 rounded-xl active:scale-[0.97] transition-transform"
-                    style={{ border: '1px solid rgba(31,111,235,0.30)', background: 'rgba(31,111,235,0.08)' }}>
-                    {cards.map((c, j) => <Card key={j} r={c.r} s={c.s} size="sm" />)}
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 active:scale-[0.97] transition-all hover:border-[#d4a843]"
+                    style={{ background: '#161b22', borderColor: '#30363d' }}>
+                    {cards.map((c, j) => <Card key={j} r={c.r} s={c.s} size="md" />)}
                   </button>
                 )
               })}

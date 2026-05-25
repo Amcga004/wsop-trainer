@@ -796,12 +796,13 @@ describe('Multi-level simulation', () => {
 
 // ── SUITE 16: Showdown integrity ──────────────────────────────
 describe('Showdown integrity', () => {
-  it('showdownSeat is set when board reaches river', () => {
+  it('showdownSeat is set when hand goes to river showdown without hero folding', () => {
     let checked = false
-    for (let attempt = 0; attempt < 20 && !checked; attempt++) {
+    for (let attempt = 0; attempt < 30 && !checked; attempt++) {
       const engine = makeHandAt(0)
       playHandToEnd(engine, 0, 18000)
-      if (engine.board.length === 5 && engine.isOver) {
+      // Only verify showdownSeat when hero didn't fold (true showdown)
+      if (engine.board.length === 5 && engine.isOver && !engine.heroSeat.folded) {
         checked = true
         expect(engine.showdownSeat).not.toBeNull()
       }

@@ -281,7 +281,8 @@ function resolveVillainPostflop(
   betFacing: number,  // 0 if checking, >0 if facing a bet
   street: Street,
   levelIndex: number,
-  isAggressor: boolean // did this villain bet last street
+  isAggressor: boolean, // did this villain bet last street
+  villainSeq: string[] = []
 ): { action: PlayerAction; desc: string } {
   if (!seat.holeCards) return { action: { type: 'fold' }, desc: `${seat.position} folds` }
 
@@ -392,6 +393,23 @@ function resolveVillainPostflop(
 
   // Checking (no bet facing)
 
+  // After two streets of checking with a strong hand, villain bets river at high frequency
+  const villainCheckedTwice =
+    villainSeq.length >= 3 &&
+    villainSeq[villainSeq.length - 1] === 'x' &&
+    villainSeq[villainSeq.length - 2] === 'x'
+  const strongEnoughForLateBet = hs.str >= 2 ||
+    (hs.str === 1 && (hs.pairPos === 'overpair' || hs.pairPos === 'toppair'))
+  if (betFacing === 0 && street === 'river' && villainCheckedTwice && strongEnoughForLateBet) {
+    if (Math.random() < 0.85) {
+      const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * 0.55)))
+      return {
+        action: { type: 'raise', amount: betAmt },
+        desc: `${seat.position} bets ${betAmt.toLocaleString()}`,
+      }
+    }
+  }
+
   // River polarization — value bet strong, bluff air, check medium
   if (street === 'river') {
     if (hs.str >= 4) {
@@ -433,7 +451,11 @@ function resolveVillainPostflop(
     const finalBetFreq = baseBetFreq * streetMult * handMult
     const minFreq = (spr === 'very_low' || spr === 'low') ? 0.90 : 0
     const adjustedBetFreq = Math.max(minFreq, Math.min(0.95, finalBetFreq + aggrScore * 0.04))
-    if (Math.random() < adjustedBetFreq) {
+    // Hero checked to villain — exploit passivity
+    const passivityBonus = betFacing === 0 ? (hs.str >= 4 ? 0.20 : 0.20) : 0
+    const absoluteMin = betFacing === 0 ? 0.85 : minFreq
+    const trueFinalFreq = Math.max(adjustedBetFreq + passivityBonus, absoluteMin)
+    if (Math.random() < trueFinalFreq) {
       const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(hs.str))))
       return {
         action: { type: 'raise', amount: betAmt },
@@ -445,7 +467,10 @@ function resolveVillainPostflop(
 
   // Top pair / overpair: bet based on archetype
   if (hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')) {
-    const betProb = seat.archetype === 'LA' ? 0.7 : seat.archetype === 'TA' ? 0.55 : seat.archetype === 'LP' ? 0.3 : 0.2
+    const baseBetProb = seat.archetype === 'LA' ? 0.7 : seat.archetype === 'TA' ? 0.55 : seat.archetype === 'LP' ? 0.3 : 0.2
+    const passiveBonusTP = betFacing === 0 ? 0.10 : 0
+    const minBetProbTP = betFacing === 0 ? 0.60 : 0
+    const betProb = Math.max(baseBetProb + passiveBonusTP, minBetProbTP)
     if (Math.random() < betProb) {
       const betAmt = Math.min(seat.stack, Math.max(100, r100(pot * villainBetSizePct(hs.str))))
       return {
@@ -2173,10 +2198,12 @@ export function processHeroAction(
       )
       result = { action: pfResult.action, desc: pfResult.desc }
     } else {
+      const vprofileSeq = engine.villainProfiles.find(p => p.seatIndex === seat.seatIndex)?.actionSequence ?? []
       result = resolveVillainPostflop(
         seat, engine.board, engine.pot,
         currentBet, engine.street, levelIndex,
-        lastAggressorSeat?.seatIndex === seat.seatIndex
+        lastAggressorSeat?.seatIndex === seat.seatIndex,
+        vprofileSeq
       )
     }
 
@@ -2501,9 +2528,11 @@ function advanceStreet(
     const seat = engine.seats.find(s => s.position === pos)
     if (!seat || seat.folded || seat.allIn) continue
 
+    const avpSeq = engine.villainProfiles.find(p => p.seatIndex === seat.seatIndex)?.actionSequence ?? []
     const result = resolveVillainPostflop(
       seat, engine.board, engine.pot,
-      currentBet, engine.street, levelIndex, false
+      currentBet, engine.street, levelIndex, false,
+      avpSeq
     )
 
     const avprofile = engine.villainProfiles.find(p => p.seatIndex === seat.seatIndex)
