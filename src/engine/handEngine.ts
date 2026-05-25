@@ -2433,8 +2433,8 @@ function advanceStreet(
     return null
   }
 
-  // Reset invested for new street
-  stillIn.forEach(s => { s.invested = 0 })
+  // Reset invested for new street — clears chip display from previous street
+  engine.seats.forEach(s => { s.invested = 0 })
 
   // If hero is all-in, run out remaining streets automatically
   if (engine.heroSeat.allIn) {
