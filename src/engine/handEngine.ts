@@ -1107,8 +1107,10 @@ function generateHeroOptions(
     const fourBetStd    = r100(currentBet * 2.3)
     const callCost = Math.min(heroSeat.stack, Math.max(0, currentBet - heroSeat.invested))
     const limpCost = Math.min(heroSeat.stack, Math.max(0, bb - heroSeat.invested))
+    const isCommitting = (raiseAmount: number): boolean =>
+      raiseAmount > heroSeat.stack * 0.40
     const threeBetCommitsStack =
-      threeBetStd > heroSeat.stack * 0.4 ||
+      isCommitting(threeBetStd) ||
       (heroSeat.stack - threeBetStd) < bb * 12
 
     // ── SCENARIO: FIRST IN ───────────────────────────────
@@ -1364,15 +1366,15 @@ function generateHeroOptions(
         })
       }
 
-      // 3. 4-BET STANDARD
-      if (in4bet && fourBetStd < heroSeat.stack * 0.8) {
+      // 3. 4-BET STANDARD (only when it doesn't pot-commit)
+      if (in4bet && !isCommitting(fourBetStd) && fourBetStd < heroSeat.stack) {
         options.push({
           label: `4-bet to ${fourBetStd.toLocaleString()}`,
           type: 'raise',
           amount: fourBetStd,
           chipCost: fourBetStd,
           quality: 'best',
-          coaching: `4-bet with ${heroHandStr}. Applies maximum pressure.`,
+          coaching: `4-bet with ${heroHandStr}. Applies maximum pressure without pot-committing.`,
         })
       }
 
@@ -1383,9 +1385,11 @@ function generateHeroOptions(
           type: 'shove',
           amount: heroSeat.stack,
           chipCost: heroSeat.stack,
-          quality: in4bet ? (depth < 25 ? 'best' : 'good') : inVs3bet ? 'ok' : 'bad',
+          quality: in4bet ? (depth < 25 || isCommitting(fourBetStd) ? 'best' : 'good') : inVs3bet ? 'ok' : 'bad',
           coaching: in4bet
-            ? `Shoving ${heroHandStr} facing a 3-bet. Maximum pressure.`
+            ? isCommitting(fourBetStd)
+              ? `Shove — a 4-bet would commit more than 40% of your stack anyway. Get it in with ${heroHandStr}.`
+              : `Shoving ${heroHandStr} facing a 3-bet. Maximum pressure.`
             : `Shoving ${heroHandStr} is too aggressive here. 4-bet smaller or call.`,
         })
       }
@@ -1393,6 +1397,13 @@ function generateHeroOptions(
 
     // ── SCENARIO: FACING 4-BET+ ──────────────────────────
     else if (raisers >= 3) {
+      const fiveBetSize = r100(currentBet * 2.3)
+      const fiveBetCommits = isCommitting(fiveBetSize)
+      const fiveBetMakesSense = !fiveBetCommits &&
+        fiveBetSize < heroSeat.stack &&
+        fiveBetSize !== r100(heroSeat.stack)
+
+      // 1. FOLD
       options.push({
         label: 'Fold',
         type: 'fold',
@@ -1400,18 +1411,52 @@ function generateHeroOptions(
         chipCost: 0,
         quality: in4bet ? 'bad' : 'best',
         coaching: in4bet
-          ? `${heroHandStr} is strong enough to shove vs a 4-bet.`
-          : `Correct fold. Only continue with QQ+/AK vs a 4-bet.`,
+          ? `${heroHandStr} is strong enough to continue vs a 4-bet. Don't fold.`
+          : `Correct fold. Only continue with QQ+/AK vs a 4-bet.${nearBubble ? ' Near the bubble, this fold is even more important.' : ''}`,
       })
+
+      // 2. CALL (if call doesn't already put hero all-in)
+      if (callCost > 0 && callCost < heroSeat.stack) {
+        options.push({
+          label: `Call ${currentBet.toLocaleString()}`,
+          type: 'call',
+          amount: currentBet,
+          chipCost: callCost,
+          quality: inVs3bet ? 'good' : 'bad',
+          coaching: inVs3bet
+            ? `Calling the 4-bet with ${heroHandStr}. You have good equity but consider whether shoving is better.`
+            : `Calling ${heroHandStr} vs a 4-bet leaks chips. Fold or shove.`,
+        })
+      }
+
+      // 3. 5-BET (only if it doesn't pot-commit)
+      if (fiveBetMakesSense) {
+        options.push({
+          label: `5-bet to ${fiveBetSize.toLocaleString()}`,
+          type: 'raise',
+          amount: fiveBetSize,
+          chipCost: Math.max(0, fiveBetSize - heroSeat.invested),
+          quality: in4bet ? 'best' : 'bad',
+          coaching: in4bet
+            ? `5-bet to apply maximum pressure without pot-committing. Villain must decide for their tournament life. Fold to a 6-bet shove with anything below AA/KK.`
+            : `Don't 5-bet ${heroHandStr} here. You need QQ+/AK to continue vs a 4-bet.`,
+        })
+      }
+
+      // 4. SHOVE
       options.push({
         label: `Shove ${heroSeat.stack.toLocaleString()}`,
         type: 'shove',
         amount: heroSeat.stack,
-        chipCost: heroSeat.stack,
-        quality: in4bet ? 'best' : 'bad',
+        chipCost: Math.max(0, heroSeat.stack - heroSeat.invested),
+        quality: in4bet
+          ? (depth < 25 || fiveBetCommits) ? 'best' : 'good'
+          : 'bad',
         coaching: in4bet
-          ? `Mandatory shove with ${heroHandStr}. Never fold a premium facing a 4-bet.`
-          : `Shoving ${heroHandStr} vs a 4-bet is too loose. Fold.`,
+          ? fiveBetCommits
+            ? `Shove — a 5-bet would commit more than 40% of your stack anyway. Get it in with ${heroHandStr}.`
+            : `Shoving ${heroHandStr} vs a 4-bet is also fine. Maximum pressure.`
+          : `Don't shove ${heroHandStr} vs a 4-bet. Only AA/KK/QQ/AK should consider it.`,
       })
     }
 
