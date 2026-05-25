@@ -6,6 +6,8 @@ import { QSCORE, QLABEL } from '../../types'
 import { getBB, getSB, getAnte, getBBDepth, getDay, HANDS_PER_LEVEL, TOTAL_LEVELS, TOTAL_PLAYERS } from '../../engine/tournamentStructure'
 import type { HeroOption } from '../../engine/handEngine'
 import { evalHand } from '../../engine/handEval'
+import { getRanges, getShoveRanges } from '../../engine/rangeData'
+import type { Position } from '../../engine/rangeData'
 
 const fmt  = (n: number): string => n >= 1_000_000 ? (n/1_000_000).toFixed(1)+'M' : n >= 1_000 ? Math.round(n/1_000)+'k' : n.toLocaleString()
 const fmtF = (n: number): string => n.toLocaleString()
@@ -93,11 +95,178 @@ function BetChip({ amount, leftPct, topPct, compact }: {
   )
 }
 
+// ── Range Matrix Overlay ──────────────────────────────────────
+const GRID_RANKS = ['A','K','Q','J','T','9','8','7','6','5','4','3','2']
+const TAB_COLORS: Record<string, string> = {
+  rfi: '#3fb950', vsRaiseCall: '#1f6feb', threebet: '#d4a843',
+  vs3betCall: '#8b5cf6', fourbet: '#f85149', shove: '#f85149', callShove: '#3fb950',
+}
+
+function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
+  pos: string
+  bbDepth: number
+  heroCards?: { r: string; s: string }[] | null
+  onClose: () => void
+}) {
+  const VALID_POSITIONS = ['UTG','UTG1','UTG2','LJ','HJ','CO','BTN','SB','BB']
+  const safePos = (VALID_POSITIONS.includes(pos) ? pos : 'BTN') as Position
+  const isShoveDepth = bbDepth < 20
+
+  type TabKey = 'rfi' | 'vsRaiseCall' | 'threebet' | 'vs3betCall' | 'fourbet' | 'shove' | 'callShove'
+  const [tab, setTab] = useState<TabKey>(isShoveDepth ? 'shove' : 'rfi')
+
+  const rangeSet = getRanges(safePos, bbDepth)
+  const shoveSet = getShoveRanges(safePos, bbDepth)
+
+  const currentRange: string[] = (() => {
+    if (isShoveDepth) return tab === 'callShove' ? shoveSet.callShove : shoveSet.shove
+    if (tab === 'vsRaiseCall') return rangeSet.vsRaiseCall
+    if (tab === 'threebet')    return rangeSet.threebet
+    if (tab === 'vs3betCall')  return rangeSet.vs3betCall
+    if (tab === 'fourbet')     return rangeSet.fourbet
+    return rangeSet.rfi
+  })()
+
+  const inRangeSet = new Set(currentRange)
+
+  let heroCell: string | null = null
+  if (heroCards && heroCards.length >= 2) {
+    const r1 = heroCards[0].r, r2 = heroCards[1].r
+    const s1 = heroCards[0].s, s2 = heroCards[1].s
+    if (r1 === r2) {
+      heroCell = r1 + r1
+    } else {
+      const idx1 = GRID_RANKS.indexOf(r1), idx2 = GRID_RANKS.indexOf(r2)
+      heroCell = idx1 < idx2
+        ? (s1 === s2 ? r1 + r2 + 's' : r1 + r2 + 'o')
+        : (s1 === s2 ? r2 + r1 + 's' : r2 + r1 + 'o')
+    }
+  }
+
+  const totalCombos = currentRange.reduce((sum, hand) => {
+    if (hand.length === 2) return sum + 6
+    if (hand.endsWith('s')) return sum + 4
+    return sum + 12
+  }, 0)
+
+  const tabs: { key: TabKey; label: string }[] = isShoveDepth
+    ? [{ key: 'shove', label: 'Shove' }, { key: 'callShove', label: 'Call' }]
+    : [
+        { key: 'rfi',         label: 'RFI'     },
+        { key: 'vsRaiseCall', label: 'vs Raise' },
+        { key: 'threebet',    label: '3-Bet'   },
+        { key: 'vs3betCall',  label: 'vs 3-Bet' },
+        { key: 'fourbet',     label: '4-Bet'   },
+      ]
+
+  const activeColor = TAB_COLORS[tab] ?? '#3fb950'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.82)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="w-full rounded-2xl p-4"
+        style={{ background: '#161b22', border: '1px solid #30363d', maxWidth: 380, maxHeight: '90vh', overflowY: 'auto' }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[#d4a843] font-['Syne'] font-bold text-lg">{pos}</span>
+            <span className="text-[#484f58] text-[11px]">Preflop ranges · {bbDepth}BB</span>
+          </div>
+          <button onClick={onClose}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3] transition-colors"
+            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid #30363d' }}>
+            ✕
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1.5 mb-2.5 flex-wrap">
+          {tabs.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all font-['Syne']"
+              style={{
+                background: tab === t.key ? TAB_COLORS[t.key] : 'rgba(255,255,255,0.04)',
+                color: tab === t.key ? '#0d0d0d' : '#8b949e',
+                border: `1px solid ${tab === t.key ? TAB_COLORS[t.key] : '#30363d'}`,
+              }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Stats */}
+        <div className="text-[10px] text-[#484f58] mb-2">
+          {totalCombos} combos · {Math.round(totalCombos / 1326 * 100)}% of hands
+        </div>
+
+        {/* Column rank headers */}
+        <div className="grid mb-0.5" style={{ gridTemplateColumns: '14px repeat(13, 1fr)', gap: 2 }}>
+          <div />
+          {GRID_RANKS.map(r => (
+            <div key={r} className="text-center text-[#484f58]" style={{ fontSize: 6 }}>{r}</div>
+          ))}
+        </div>
+
+        {/* 13×13 grid with row headers */}
+        {GRID_RANKS.map((r1, i) => (
+          <div key={r1} className="grid mb-[2px]" style={{ gridTemplateColumns: '14px repeat(13, 1fr)', gap: 2 }}>
+            <div className="flex items-center justify-center text-[#484f58]" style={{ fontSize: 6 }}>{r1}</div>
+            {GRID_RANKS.map((r2, j) => {
+              const hand = i === j
+                ? r1 + r1
+                : j > i
+                  ? r1 + r2 + 's'
+                  : r2 + r1 + 'o'
+              const inR = inRangeSet.has(hand)
+              const isHero = heroCell === hand
+              return (
+                <div key={j} title={hand}
+                  style={{
+                    aspectRatio: '1',
+                    borderRadius: 2,
+                    background: isHero ? '#d4a843' : inR ? activeColor + '35' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${isHero ? '#d4a843' : inR ? activeColor + '70' : 'transparent'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 4,
+                    color: isHero ? '#0d0d0d' : inR ? activeColor : '#30363d',
+                  }}>
+                  {hand}
+                </div>
+              )
+            })}
+          </div>
+        ))}
+
+        {/* Legend */}
+        <div className="flex gap-3 mt-3 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-3 rounded-sm" style={{ background: activeColor + '35', border: `1px solid ${activeColor}70` }} />
+            <span className="text-[9px] text-[#484f58]">In range</span>
+          </div>
+          {heroCell && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-sm" style={{ background: '#d4a843' }} />
+              <span className="text-[9px] text-[#484f58]">
+                Your hand ({heroCell}){inRangeSet.has(heroCell) ? ' ✓ in range' : ' — not in range'}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Table Visual ──────────────────────────────────────────────
-function TableVisual({ engine, heroSeatIndex, compact = false }: {
+function TableVisual({ engine, heroSeatIndex, compact = false, onSeatClick }: {
   engine: NonNullable<ReturnType<typeof useGameState>['state']['engine']>
   heroSeatIndex: number
   compact?: boolean
+  onSeatClick?: (pos: string) => void
 }) {
   const seats = engine.seats
   const heroSeat = seats[heroSeatIndex]
@@ -209,7 +378,9 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
 
         return (
           <div key={seat.seatIndex} className="absolute z-20"
-            style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -50%)' }}>
+            style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -50%)',
+              cursor: onSeatClick ? 'pointer' : 'default' }}
+            onClick={() => onSeatClick?.(seat.position)}>
             <div className="relative">
 
             {isHero ? (
@@ -716,6 +887,7 @@ export default function GamePage() {
   const [selectedMode, setSelectedMode] =
     useState<'full' | 'day1' | 'day2' | 'day3'>('full')
   const [canResume, setCanResume] = useState(false)
+  const [rangeViewerPos, setRangeViewerPos] = useState<string | null>(null)
 
   const {
     state, startTournament, takeAction, continueAfterOutcome,
@@ -732,6 +904,11 @@ export default function GamePage() {
 
   useEffect(() => { startTournament('full') }, [])
   useEffect(() => { setCanResume(hasSavedGame()) }, [])
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setRangeViewerPos(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   useEffect(() => {
     if (phase === 'bust' || phase === 'win') {
       finalizeTournament(phase === 'win')
@@ -1271,7 +1448,8 @@ export default function GamePage() {
         {/* Center: table */}
         <div className="flex-1 flex flex-col justify-center items-center p-6 min-h-0">
           <div className="w-full max-w-xl">
-            <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={false} />
+            <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={false}
+              onSeatClick={setRangeViewerPos} />
           </div>
           {(decision || lastDecision) && (
             <div className="w-full max-w-xl mt-3 rounded-xl border-l-2 border-[#d4a843] px-4 py-2.5"
@@ -1319,7 +1497,8 @@ export default function GamePage() {
       {/* Mobile stacked */}
       <div className="flex-1 overflow-y-auto lg:hidden">
         <div className="px-2 pt-2">
-          <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={true} />
+          <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={true}
+            onSeatClick={setRangeViewerPos} />
         </div>
 
         <div className="p-3 space-y-3">
@@ -1418,6 +1597,16 @@ export default function GamePage() {
           )}
         </div>
       </div>
+
+      {rangeViewerPos && (
+        <RangeMatrix
+          key={rangeViewerPos}
+          pos={rangeViewerPos}
+          bbDepth={bbDepth}
+          heroCards={engine.heroSeat.holeCards}
+          onClose={() => setRangeViewerPos(null)}
+        />
+      )}
     </div>
   )
 }
