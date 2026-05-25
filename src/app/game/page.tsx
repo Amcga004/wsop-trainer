@@ -60,6 +60,46 @@ function QBadge({ q, small }: { q: string; small?: boolean }) {
   )
 }
 
+// ── Bet Chip ──────────────────────────────────────────────────
+function BetChip({ amount, angle, tableW, tableH, compact }: {
+  amount: number
+  angle: number
+  tableW: number
+  tableH: number
+  compact: boolean
+}) {
+  const rad = (angle - 90) * (Math.PI / 180)
+  const rx = tableW * (compact ? 0.20 : 0.22)
+  const ry = tableH * (compact ? 0.20 : 0.22)
+  const cx = tableW / 2 + rx * Math.cos(rad)
+  const cy = tableH / 2 + ry * Math.sin(rad)
+  const chipSize = compact ? 20 : 26
+
+  return (
+    <div className="absolute flex flex-col items-center"
+      style={{ left: cx, top: cy, transform: 'translate(-50%, -50%)', zIndex: 25 }}>
+      <div className="rounded-full border-2 flex items-center justify-center"
+        style={{
+          width: chipSize, height: chipSize,
+          background: 'linear-gradient(135deg, #d4a843, #8b6914)',
+          borderColor: '#f0c040',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.5), inset 0 1px rgba(255,255,255,0.2)',
+        }}>
+        <div className="rounded-full"
+          style={{
+            width: chipSize * 0.5, height: chipSize * 0.5,
+            background: 'rgba(255,255,255,0.15)',
+            border: '1px solid rgba(255,255,255,0.3)',
+          }} />
+      </div>
+      <div className="text-[#d4a843] font-bold font-mono mt-0.5"
+        style={{ fontSize: compact ? 8 : 10 }}>
+        {amount.toLocaleString()}
+      </div>
+    </div>
+  )
+}
+
 // ── Table Visual ──────────────────────────────────────────────
 function TableVisual({ engine, heroSeatIndex, compact = false }: {
   engine: NonNullable<ReturnType<typeof useGameState>['state']['engine']>
@@ -69,6 +109,8 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
   const seats = engine.seats
   const heroSeat = seats[heroSeatIndex]
   const height = compact ? 180 : 340
+  const tableW = compact ? 320 : 600  // nominal widths matching typical render
+  const tableH = height
 
   const ellipsePositions = [
     { top: '88%', left: '50%' },
@@ -81,6 +123,13 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
     { top: '48%', left: '4%'  },
     { top: '74%', left: '18%' },
   ]
+
+  // Compute angle (north=0, clockwise) from each ellipse position
+  const seatAngles = ellipsePositions.map(p => {
+    const dx = parseFloat(p.left) - 50
+    const dy = parseFloat(p.top) - 50
+    return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360
+  })
 
   const ACTION_ORDER = ['UTG', 'UTG1', 'UTG2', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB']
   const heroPos = heroSeat?.position ?? 'BB'
@@ -139,9 +188,20 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
       {/* Center: Pot + board */}
       <div className="absolute z-10 flex flex-col items-center gap-1"
         style={{ top: '34%', left: '50%', transform: 'translate(-50%, -50%)' }}>
-        <div className="text-[#d4a843] font-['Syne'] font-bold tracking-wide"
+        <div className="text-[#d4a843] font-['Syne'] font-bold tracking-wide flex items-center gap-1.5"
           style={{ fontSize: compact ? 9 : 13 }}>
-          POT {fmtF(engine.pot)}
+          <div className="flex flex-col -space-y-1">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="rounded-full border"
+                style={{
+                  width: compact ? 8 : 10,
+                  height: compact ? 4 : 5,
+                  background: i === 0 ? '#d4a843' : i === 1 ? '#e6edf3' : '#3fb950',
+                  borderColor: 'rgba(0,0,0,0.3)',
+                }} />
+            ))}
+          </div>
+          <span>POT {fmtF(engine.pot)}</span>
         </div>
         {engine.board.length > 0 && (
           <div className="flex gap-0.5" style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.7))' }}>
@@ -168,12 +228,12 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
                     <Card key={i} r={c.r} s={c.s} size={cardSize} />
                   ))}
                 </div>
-                <div className="rounded-full px-2 py-0.5 text-center whitespace-nowrap"
+                <div className="rounded-full px-2.5 py-1 text-center whitespace-nowrap"
                   style={{ background: 'rgba(22,27,34,0.92)', border: '1px solid rgba(212,168,67,0.60)' }}>
-                  <div className="text-[#d4a843] font-bold font-['Syne'] leading-none" style={{ fontSize: compact ? 7 : 9 }}>
+                  <div className="text-[#d4a843] font-bold font-['Syne'] leading-none" style={{ fontSize: compact ? 11 : 14 }}>
                     {seat.position}
                   </div>
-                  <div className="text-[#8b949e] leading-none" style={{ fontSize: compact ? 6 : 7 }}>
+                  <div className="text-[#8b949e] leading-none" style={{ fontSize: compact ? 9 : 11 }}>
                     {fmt(seat.stack)}
                   </div>
                 </div>
@@ -200,13 +260,13 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
                   )}
                 </div>
                 {/* Position label + stack — always full opacity */}
-                <div className="text-center rounded-full px-1.5 py-0.5 whitespace-nowrap"
+                <div className="text-center rounded-full px-2.5 py-1 whitespace-nowrap"
                   style={{ background: 'rgba(22,27,34,0.90)', border: '1px solid #30363d' }}>
                   <div className="font-bold font-['Syne'] leading-none"
-                    style={{ fontSize: compact ? 7 : 9, color: isActive ? '#d4a843' : '#6b7280' }}>
+                    style={{ fontSize: compact ? 11 : 14, color: isActive ? '#d4a843' : '#6b7280' }}>
                     {seat.position}
                   </div>
-                  <div className="leading-none" style={{ fontSize: compact ? 6 : 7, color: '#484f58' }}>
+                  <div className="leading-none" style={{ fontSize: compact ? 9 : 11, color: '#484f58' }}>
                     {fmt(seat.stack)}
                   </div>
                 </div>
@@ -222,6 +282,22 @@ function TableVisual({ engine, heroSeatIndex, compact = false }: {
             )}
             </div>
           </div>
+        )
+      })}
+
+      {/* Bet chips on felt */}
+      {orderedSeats.map((seat, posIdx) => {
+        if (seat.invested <= 0) return null
+        if (seat.folded) return null
+        return (
+          <BetChip
+            key={`bet-${seat.seatIndex}`}
+            amount={seat.invested}
+            angle={seatAngles[posIdx]}
+            tableW={tableW}
+            tableH={tableH}
+            compact={compact}
+          />
         )
       })}
     </div>
