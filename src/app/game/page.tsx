@@ -1097,6 +1097,7 @@ export default function GamePage() {
     useState<'full' | 'day1' | 'day2' | 'day3'>('full')
   const [rangeViewerSeat, setRangeViewerSeat] = useState<{ position: string; depth: number; board?: { r: string; s: string }[]; defaultTab?: TabKey } | null>(null)
   const [showMenu, setShowMenu] = useState(false)
+  const [showExitConfirm, setShowExitConfirm] = useState(false)
   const [showNewTournamentConfirm, setShowNewTournamentConfirm] = useState(false)
   const [showSavedToast, setShowSavedToast] = useState(false)
   const [activeSaves, setActiveSaves] = useState<ActiveSave[]>([])
@@ -1106,7 +1107,7 @@ export default function GamePage() {
   const {
     state, startTournament, takeAction, continueAfterOutcome,
     submitGuess, nextHand, continueTournament, finalizeTournament,
-    resumeTournament, saveTournament,
+    resumeTournament, saveTournament, exitToHome,
     bb, sb, ante, bbDepth, day, nearBubble, scorePct,
   } = useGameState('full')
 
@@ -1339,7 +1340,17 @@ export default function GamePage() {
       <div className="px-3 py-1 flex-shrink-0 lg:hidden"
         style={{ background: '#161b22', borderBottom: '1px solid #30363d' }}>
         <div className="flex items-center justify-between">
-          <span className="text-[#d4a843] text-[11px] font-bold font-['Syne']">♠ WSOP Main Event</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowExitConfirm(true)}
+              className="flex items-center justify-center rounded-lg transition-colors hover:bg-[#30363d]"
+              style={{ minWidth: 28, minHeight: 28, color: '#484f58' }}
+              aria-label="Return to home">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 1L1 7h2v7h4v-4h2v4h4V7h2L8 1z"/>
+              </svg>
+            </button>
+            <span className="text-[#d4a843] text-[11px] font-bold font-['Syne']">♠ WSOP Main Event</span>
+          </div>
           <div className="flex items-center gap-2">
             <span className={`text-[11px] font-bold ${bbDepth < 15 ? 'text-[#f85149]' : bbDepth < 25 ? 'text-[#d4a843]' : 'text-[#e6edf3]'}`}>
               {fmtF(heroStack)} <span className="text-[#484f58] text-[9px]">{bbDepth}BB</span>
@@ -1800,6 +1811,18 @@ export default function GamePage() {
             </button>
           </div>
           <button onClick={() => {
+            setShowMenu(false)
+            setShowExitConfirm(true)
+          }}
+            className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-colors hover:bg-[#30363d]"
+            style={{ background: '#0d1117', border: '1px solid #30363d' }}>
+            <span className="text-base">🏠</span>
+            <div className="text-left">
+              <div className="text-[#e6edf3] text-sm font-medium">Return Home</div>
+              <div className="text-[#484f58] text-[10px]">Progress will be saved automatically</div>
+            </div>
+          </button>
+          <button onClick={() => {
             saveTournament()
             setShowMenu(false)
             setShowSavedToast(true)
@@ -1847,6 +1870,50 @@ export default function GamePage() {
       </div>
     )}
 
+    {/* ── Exit to home confirmation ── */}
+    {showExitConfirm && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        style={{ background: 'rgba(0,0,0,0.85)' }}
+        onClick={e => { if (e.target === e.currentTarget) setShowExitConfirm(false) }}>
+        <div className="w-full max-w-sm rounded-2xl border border-[#30363d] p-5"
+          style={{ background: '#161b22' }}>
+          <div className="text-[#e6edf3] font-['Syne'] font-bold text-base mb-1">
+            Return to Home?
+          </div>
+          <div className="text-[#8b949e] text-sm mb-3">
+            Your progress will be automatically saved.
+          </div>
+          <div className="rounded-xl p-3 mb-4 grid grid-cols-3 gap-2"
+            style={{ background: '#0d1117' }}>
+            {([
+              { label: 'Stack', value: fmtF(heroStack) },
+              { label: 'Level', value: `L${levelIndex + 1}` },
+              { label: 'Hand',  value: `${totalHands}/${TOTAL_HANDS}` },
+            ] as { label: string; value: string }[]).map(({ label, value }) => (
+              <div key={label} className="text-center">
+                <div className="text-[#e6edf3] font-bold text-sm">{value}</div>
+                <div className="text-[#484f58] text-[9px]">{label}</div>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-2">
+            <button
+              onClick={() => { exitToHome(); setShowExitConfirm(false) }}
+              className="w-full py-3 rounded-xl font-['Syne'] font-bold text-sm text-[#0d0d0d] hover:bg-[#e6b84a] transition-colors"
+              style={{ background: '#d4a843' }}>
+              Save &amp; Return Home
+            </button>
+            <button
+              onClick={() => setShowExitConfirm(false)}
+              className="w-full py-3 rounded-xl text-[#484f58] text-sm hover:text-[#8b949e] transition-colors"
+              style={{ border: '1px solid #30363d' }}>
+              Keep Playing
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* ── Auto-save toast ── */}
     {showSavedToast && (
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2
@@ -1861,7 +1928,15 @@ export default function GamePage() {
       {/* Desktop header */}
       <div className="hidden lg:flex items-center justify-between px-6 py-2.5 flex-shrink-0"
         style={{ background: '#161b22', borderBottom: '1px solid #30363d' }}>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setShowExitConfirm(true)}
+            className="flex items-center justify-center rounded-lg transition-colors hover:bg-[#30363d]"
+            style={{ minWidth: 32, minHeight: 32, color: '#484f58' }}
+            aria-label="Return to home">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 1L1 7h2v7h4v-4h2v4h4V7h2L8 1z"/>
+            </svg>
+          </button>
           <span className="text-[#d4a843] font-['Syne'] font-bold text-sm">♠ WSOP Main Event</span>
           <span className="text-[#484f58] text-xs">
             Day {day} · Level {levelIndex + 1} · <span className="text-[#d4a843]">{fmtF(sb)}/{fmtF(bb)}</span> · {fmtF(ante)} ante

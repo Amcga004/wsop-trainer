@@ -966,6 +966,41 @@ export function useGameState(initialMode: SessionMode = 'full') {
     }
   }, [state.totalHands, state.phase])
 
+  // ── Exit to home (save + return to lobby) ─────────────────
+  const exitToHome = useCallback(() => {
+    if (state.tournamentId && state.phase !== 'lobby') {
+      try {
+        const save: ActiveSave = {
+          id:             state.tournamentId,
+          startedAt:      state.startedAt ?? Date.now(),
+          savedAt:        Date.now(),
+          heroStack:      state.heroStack,
+          levelIndex:     state.levelIndex,
+          totalHands:     state.totalHands,
+          sessionScore:   state.sessionScore,
+          sessionMaxScore: state.sessionMaxScore,
+          playersLeft:    state.playersLeft,
+          heroSeatIndex:  state.heroSeatIndex,
+          dealerButton:   state.dealerButton,
+          mode:           state.mode ?? 'full',
+          deviceId:       getOrCreateDeviceId(),
+          tableSeats:     state.tableSeats.map(s => ({
+            seatIndex: s.seatIndex,
+            stack:     s.stack,
+            archetype: s.archetype,
+          })),
+        }
+        upsertActiveSave(save)
+      } catch (e) {
+        console.warn('Could not save before exit', e)
+      }
+    }
+    setState(() => ({
+      ...makeInitialState(state.mode ?? 'full'),
+      phase: 'lobby',
+    }))
+  }, [state])
+
   // ── Computed ──────────────────────────────────────────────
   const bb        = getBB(state.levelIndex)
   const sb        = getSB(state.levelIndex)
@@ -987,6 +1022,7 @@ export function useGameState(initialMode: SessionMode = 'full') {
     finalizeTournament,
     resumeTournament,
     saveTournament,
+    exitToHome,
     getActiveSaves,
     getCompletedSaves,
     deleteActiveSave,
