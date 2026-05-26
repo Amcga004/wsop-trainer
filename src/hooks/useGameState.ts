@@ -229,9 +229,10 @@ function makeInitialState(mode: SessionMode): GameState {
   const heroStack  = getStartingStack(mode, startLevel)
   const rawSeats   = createTable(heroStack)
   const heroSeatIndex = 4
-  const tableSeats = rawSeats.map((seat, i) =>
-    i === heroSeatIndex ? seat : { ...seat, stack: getVillainStack(mode, startLevel) }
-  )
+  const tableSeats = rawSeats.map((seat, i) => ({
+    ...seat,
+    stack: i === heroSeatIndex ? heroStack : getVillainStack(mode, startLevel),
+  }))
   const startingPlayersLeft =
     mode === 'day3' ? 500 :
     mode === 'day2' ? 3000 :
