@@ -167,3 +167,57 @@ export function isNearBubble(playersLeft: number): boolean {
 export function isItm(playersLeft: number): boolean {
   return playersLeft <= ITM_PLAYERS
 }
+
+// Payout table: [placeFrom, placeTo, prize]
+// 2024 WSOP Main Event — 2,160 places paid, ~$16.2M prize pool
+export const PAYOUT_TABLE: [number, number, number][] = [
+  [1,    1,    1_300_000],
+  [2,    2,      900_000],
+  [3,    3,      650_000],
+  [4,    4,      480_000],
+  [5,    5,      370_000],
+  [6,    6,      295_000],
+  [7,    7,      238_000],
+  [8,    8,      192_000],
+  [9,    9,      158_000],
+  [10,   10,     175_000],
+  [11,   12,     150_000],
+  [13,   15,     120_000],
+  [16,   18,      92_000],
+  [19,   21,      74_000],
+  [22,   27,      58_500],
+  [28,   36,      46_000],
+  [37,   45,      37_000],
+  [46,   54,      30_000],
+  [55,   63,      24_500],
+  [64,   90,      19_750],
+  [91,   135,     15_500],
+  [136,  180,     12_750],
+  [181,  270,     10_000],
+  [271,  360,      7_900],
+  [361,  450,      6_400],
+  [451,  540,      5_300],
+  [541,  720,      4_350],
+  [721,  900,      3_600],
+  [901,  1080,     3_000],
+  [1081, 1260,     2_600],
+  [1261, 1440,     2_300],
+  [1441, 1620,     2_150],
+  [1621, 1890,     2_050],
+  [1891, 2160,     1_450],
+]
+
+export function getPayout(place: number): number {
+  for (const [from, to, prize] of PAYOUT_TABLE) {
+    if (place >= from && place <= to) return prize
+  }
+  return 0
+}
+
+export function verifyPayoutTable(): number {
+  let total = 0
+  for (const [from, to, prize] of PAYOUT_TABLE) {
+    total += (to - from + 1) * prize
+  }
+  return total
+}
