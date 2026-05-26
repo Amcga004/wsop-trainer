@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   createHand, createTable, assignPositions, processHeroAction, advanceToNextStreet,
   scoreSequence, calcRangeAdvantage, calcNutAdvantage, sprCategory,
+  buildSidePots, calcDeadMoney, resolveShowdown,
   type HandEngine, type HeroOption, type VillainProfile,
 } from '../engine/handEngine'
 import { compareHands } from '../engine/handEval'
@@ -1322,5 +1323,77 @@ describe('Field reduction and payouts', () => {
     expect(getPayoutForPlace(1)).toBe(1_300_000)
     expect(getPayoutForPlace(2160)).toBe(1_450)
     expect(getPayoutForPlace(2161)).toBe(0)
+  })
+})
+
+// ── SUITE: Side pot calculations ──────────────────────────────
+describe('Side pot calculations', () => {
+  // Build a minimal engine snapshot with specific invested values
+  function makeEngineAt(
+    heroInvested: number,
+    villainInvested: number,
+    extraPot: number,  // antes + folder contributions
+  ): HandEngine {
+    const engine = makeHand(0, 4)
+    // Pin the invested values and pot directly
+    engine.heroSeat.invested = heroInvested
+    const villain = engine.seats.find(s => s.seatIndex !== engine.heroSeat.seatIndex)!
+    villain.invested = villainInvested
+    villain.allIn = villainInvested < heroInvested
+    // Assign hole cards to villain if missing (needed for resolveShowdown display)
+    if (!villain.holeCards) {
+      villain.holeCards = [{ r: 'A', s: '♠' }, { r: 'K', s: '♠' }]
+    }
+    engine.pot = heroInvested + villainInvested + extraPot
+    engine.isOver = true
+    return engine
+  }
+
+  it('calcDeadMoney returns 0 when investments are equal', () => {
+    const engine = makeEngineAt(8000, 8000, 500)
+    const dm = calcDeadMoney(engine.seats.filter(s => !s.folded), engine.heroSeat.seatIndex)
+    expect(dm).toBe(0)
+  })
+
+  it('calcDeadMoney returns correct excess when hero over-bet', () => {
+    const engine = makeEngineAt(10000, 7000, 1000)
+    const dm = calcDeadMoney(engine.seats.filter(s => !s.folded), engine.heroSeat.seatIndex)
+    expect(dm).toBe(3000)
+  })
+
+  it('buildSidePots splits into main pot and hero-only side pot', () => {
+    const engine = makeEngineAt(10000, 7000, 1000)
+    const activeSeatsCopy = engine.seats.filter(s => !s.folded)
+    const pots = buildSidePots(activeSeatsCopy, engine.heroSeat.seatIndex, engine.pot)
+    // mainPot = totalPot - (heroInvested - villainInvested) = 18000 - 3000 = 15000
+    // sidePot = heroInvested - villainInvested = 3000
+    expect(pots).toHaveLength(2)
+    expect(pots[0].amount).toBe(15000) // main pot — both eligible
+    expect(pots[1].amount).toBe(3000)  // side pot — hero only
+    expect(pots[1].eligibleSeats).toEqual([engine.heroSeat.seatIndex])
+  })
+
+  it('resolveShowdown returns uncalled excess to hero when villain wins', () => {
+    const engine = makeEngineAt(10000, 7000, 1000)
+    // Return dead money before resolveShowdown (mimics processHeroAction logic)
+    const dm = 3000
+    engine.heroSeat.stack += dm
+    engine.heroSeat.invested -= dm
+    engine.pot -= dm
+    engine.deadMoney = dm
+    // villain wins
+    const villain = engine.seats.find(
+      s => s.seatIndex !== engine.heroSeat.seatIndex && !s.folded
+    )!
+    engine.heroWon = false
+    engine.showdownSeat = villain
+    const heroStackBefore = engine.heroSeat.stack
+    const villainStackBefore = villain.stack
+    resolveShowdown(engine)
+    expect(engine.pot).toBe(0)
+    // Hero keeps dead money already returned, gets nothing extra
+    expect(engine.heroSeat.stack).toBe(heroStackBefore)
+    // Villain wins main pot (15000 = 7000*2 + 1000 extra)
+    expect(villain.stack - villainStackBefore).toBe(15000)
   })
 })

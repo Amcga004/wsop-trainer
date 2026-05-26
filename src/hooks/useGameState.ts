@@ -472,10 +472,14 @@ export function useGameState(initialMode: SessionMode = 'full') {
         const heroInvested = newEngine.heroSeat.invested
         const totalPot = newEngine.pot
 
-        if (newEngine.heroWon && !newEngine.isTie) {
-          // Hero wins entire pot
+        if (totalPot === 0) {
+          // resolveShowdown ran inside the engine — chips already applied
+          resolvedChipDelta = newEngine.heroSeat.stack - stackBefore
+        } else if (newEngine.heroWon && !newEngine.isTie) {
+          // Hero wins entire pot (fold win)
           newEngine.heroSeat.stack += totalPot
           resolvedChipDelta = totalPot - heroInvested
+          newEngine.pot = 0
         } else if (newEngine.isTie) {
           // Chop — split pot
           const heroShare = Math.floor(totalPot / 2)
@@ -487,31 +491,22 @@ export function useGameState(initialMode: SessionMode = 'full') {
             if (vs) vs.stack += villainShare
           }
           resolvedChipDelta = heroShare - heroInvested
+          newEngine.pot = 0
         } else {
-          // Villain wins
+          // Villain wins (fold loss)
           const winner = newEngine.showdownSeat
             ?? newEngine.activeSeats.find(
                 s => s.seatIndex !== newEngine.heroSeat.seatIndex && !s.folded
               )
           if (winner) {
             const ws = newEngine.seats.find(s => s.seatIndex === winner.seatIndex)
-            const winnerInvested = ws?.invested ?? totalPot
-            if (winner.allIn && winnerInvested < heroInvested) {
-              // Side pot: villain all-in for less
-              const mainPot = Math.min(winnerInvested * 2, totalPot)
-              const sidePot = totalPot - mainPot
-              if (ws) ws.stack += mainPot
-              newEngine.heroSeat.stack += sidePot
-              resolvedChipDelta = sidePot - heroInvested
-            } else {
-              if (ws) ws.stack += totalPot
-              resolvedChipDelta = -heroInvested
-            }
+            if (ws) ws.stack += totalPot
+            resolvedChipDelta = -heroInvested
           } else {
             resolvedChipDelta = -heroInvested
           }
+          newEngine.pot = 0
         }
-        newEngine.pot = 0
 
         // If went to showdown — show guess screen
         if (newEngine.showdownSeat) {
@@ -564,28 +559,32 @@ export function useGameState(initialMode: SessionMode = 'full') {
         // Chip resolution if hand ended during advance
         if (engineClone.isOver) {
           const totalPot = engineClone.pot
-          if (engineClone.heroWon && !engineClone.isTie) {
-            engineClone.heroSeat.stack += totalPot
-          } else if (engineClone.isTie) {
-            const heroShare = Math.floor(totalPot / 2)
-            const villainShare = totalPot - heroShare
-            engineClone.heroSeat.stack += heroShare
-            const tieVillain = engineClone.showdownSeat
-            if (tieVillain) {
-              const vs = engineClone.seats.find(s => s.seatIndex === tieVillain.seatIndex)
-              if (vs) vs.stack += villainShare
+          if (totalPot > 0) {
+            // resolveShowdown was NOT called (fold case) — apply chips here
+            if (engineClone.heroWon && !engineClone.isTie) {
+              engineClone.heroSeat.stack += totalPot
+            } else if (engineClone.isTie) {
+              const heroShare = Math.floor(totalPot / 2)
+              const villainShare = totalPot - heroShare
+              engineClone.heroSeat.stack += heroShare
+              const tieVillain = engineClone.showdownSeat
+              if (tieVillain) {
+                const vs = engineClone.seats.find(s => s.seatIndex === tieVillain.seatIndex)
+                if (vs) vs.stack += villainShare
+              }
+            } else {
+              const winner = engineClone.showdownSeat
+                ?? engineClone.activeSeats.find(
+                    s => s.seatIndex !== engineClone.heroSeat.seatIndex && !s.folded
+                  )
+              if (winner) {
+                const ws = engineClone.seats.find(s => s.seatIndex === winner.seatIndex)
+                if (ws) ws.stack += totalPot
+              }
             }
-          } else {
-            const winner = engineClone.showdownSeat
-              ?? engineClone.activeSeats.find(
-                  s => s.seatIndex !== engineClone.heroSeat.seatIndex && !s.folded
-                )
-            if (winner) {
-              const ws = engineClone.seats.find(s => s.seatIndex === winner.seatIndex)
-              if (ws) ws.stack += totalPot
-            }
+            engineClone.pot = 0
           }
-          engineClone.pot = 0
+          // If totalPot === 0, resolveShowdown already ran — stack is already correct
         }
 
         let nextPhase: GamePhase = nextDecision ? 'playing' : 'outcome'
