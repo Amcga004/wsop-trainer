@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useGameState } from '../../hooks/useGameState'
+import { useGameState, getActiveSaves, getCompletedSaves, deleteActiveSave, deleteCompletedSave } from '../../hooks/useGameState'
+import type { ActiveSave, CompletedSave } from '../../hooks/useGameState'
 import { QSCORE, QLABEL } from '../../types'
 import { getBB, getSB, getAnte, getBBDepth, getDay, HANDS_PER_LEVEL, TOTAL_LEVELS, TOTAL_PLAYERS } from '../../engine/tournamentStructure'
 import type { HeroOption } from '../../engine/handEngine'
@@ -16,6 +17,15 @@ function timeAgo(ts: number): string {
   if (m < 1) return 'just now'
   if (m < 60) return `${m}m ago`
   return `${Math.floor(m / 60)}h ago`
+}
+function fmtDate(ts: number): string {
+  const d = new Date(ts)
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+    ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+}
+function fmtMode(mode: string): string {
+  return mode === 'full' ? 'Full' : mode === 'day1' ? 'Day 1' :
+         mode === 'day2' ? 'Day 2' : mode === 'day3' ? 'Day 3+' : mode
 }
 const isRed = (s: string) => s === '♥' || s === '♦'
 const TOTAL_HANDS = TOTAL_LEVELS * HANDS_PER_LEVEL
@@ -955,20 +965,18 @@ function RightPanelOutcome({ lastOption, lastDecision, lastChipDelta, engine, co
 export default function GamePage() {
   const [selectedMode, setSelectedMode] =
     useState<'full' | 'day1' | 'day2' | 'day3'>('full')
-  const [canResume, setCanResume] = useState(false)
   const [rangeViewerSeat, setRangeViewerSeat] = useState<{ position: string; depth: number } | null>(null)
   const [showMenu, setShowMenu] = useState(false)
   const [showNewTournamentConfirm, setShowNewTournamentConfirm] = useState(false)
   const [showSavedToast, setShowSavedToast] = useState(false)
-  const [savedInfo, setSavedInfo] = useState<{
-    heroStack: number; levelIndex: number; totalHands: number;
-    sessionScore: number; sessionMaxScore: number; savedAt: number
-  } | null>(null)
+  const [activeSaves, setActiveSaves] = useState<ActiveSave[]>([])
+  const [completedSaves, setCompletedSaves] = useState<CompletedSave[]>([])
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const {
     state, startTournament, takeAction, continueAfterOutcome,
     submitGuess, nextHand, continueTournament, finalizeTournament,
-    resumeTournament, hasSavedGame, clearSavedGame, saveTournament, getSavedGameInfo,
+    resumeTournament, saveTournament,
     bb, sb, ante, bbDepth, day, nearBubble, scorePct,
   } = useGameState('full')
 
@@ -978,12 +986,13 @@ export default function GamePage() {
     guessOptions, guessCorrect, totalHands, heroSeatIndex,
   } = state
 
-  useEffect(() => { startTournament('full') }, [])
+  // Reload home-screen data whenever we return to lobby
   useEffect(() => {
-    const info = getSavedGameInfo()
-    setCanResume(!!info)
-    setSavedInfo(info)
-  }, [])
+    if (phase === 'lobby') {
+      setActiveSaves(getActiveSaves())
+      setCompletedSaves(getCompletedSaves())
+    }
+  }, [phase])
   useEffect(() => {
     if (state.totalHands > 0) {
       setShowSavedToast(true)
@@ -999,7 +1008,6 @@ export default function GamePage() {
   useEffect(() => {
     if (phase === 'bust' || phase === 'win') {
       finalizeTournament(phase === 'win')
-      clearSavedGame()
     }
   }, [phase])
 
@@ -1009,86 +1017,179 @@ export default function GamePage() {
   // ── Loading ──────────────────────────────────────────────
   if (phase === 'lobby') {
     return (
-      <div className="h-screen flex items-center justify-center p-6" style={{ background: '#0d1117' }}>
-        <div className="w-full max-w-sm space-y-4">
-          <div className="text-center mb-8">
-            <div className="text-[#d4a843] font-['Syne'] text-2xl font-bold mb-1">♠ WSOP Trainer</div>
-            <div className="text-[#484f58] text-sm">Main Event Preparation</div>
-          </div>
+      <div className="min-h-screen flex flex-col" style={{ background: '#0d1117' }}>
 
-          {canResume && savedInfo && (
-            <div className="rounded-xl border border-[#d4a843]/30 p-4"
-              style={{ background: 'rgba(212,168,67,0.06)' }}>
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[#d4a843] text-sm font-bold font-['Syne']">Saved Tournament</div>
-                <div className="text-[#484f58] text-[10px]">{timeAgo(savedInfo.savedAt)}</div>
+        {/* Header */}
+        <div className="px-4 pt-8 pb-4 text-center">
+          <div className="text-[#d4a843] font-['Syne'] text-2xl font-black tracking-wide mb-1">
+            ♠ WSOP Trainer
+          </div>
+          <div className="text-[#484f58] text-sm">Main Event Preparation</div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 pb-8 space-y-6 max-w-lg mx-auto w-full">
+
+          {/* ── IN PROGRESS ─────────────────────────────── */}
+          {activeSaves.length > 0 && (
+            <div>
+              <div className="text-[#484f58] text-[10px] uppercase tracking-widest font-['Syne'] mb-2 px-1">
+                In Progress
               </div>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 mb-3">
-                {([
-                  ['Stack', fmtF(savedInfo.heroStack)],
-                  ['Level', String(savedInfo.levelIndex + 1)],
-                  ['Hands', String(savedInfo.totalHands)],
-                  ['Score', savedInfo.sessionMaxScore > 0
-                    ? Math.round(savedInfo.sessionScore / savedInfo.sessionMaxScore * 100) + '%'
-                    : '—'],
-                ] as [string, string][]).map(([label, val]) => (
-                  <div key={label} className="flex justify-between">
-                    <span className="text-[#484f58] text-[11px]">{label}</span>
-                    <span className="text-[#e6edf3] text-[11px] font-medium">{val}</span>
+              <div className="space-y-2">
+                {activeSaves.map(save => (
+                  <div key={save.id} className="rounded-xl border border-[#30363d] p-4"
+                    style={{ background: '#161b22' }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="rounded-full px-2 py-0.5 text-[9px] font-bold"
+                        style={{ background: 'rgba(212,168,67,0.15)', color: '#d4a843', border: '1px solid rgba(212,168,67,0.3)' }}>
+                        {fmtMode(save.mode)}
+                      </div>
+                      <div className="text-[#484f58] text-[9px]">{timeAgo(save.savedAt)}</div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 mb-3">
+                      {([
+                        { label: 'Stack', value: fmtF(save.heroStack) },
+                        { label: 'Level', value: `L${save.levelIndex + 1}` },
+                        { label: 'Hand',  value: String(save.totalHands) },
+                        { label: 'Score', value: save.sessionMaxScore > 0
+                            ? Math.round(save.sessionScore / save.sessionMaxScore * 100) + '%' : '—' },
+                      ]).map(({ label, value }) => (
+                        <div key={label} className="text-center rounded-lg py-2" style={{ background: '#0d1117' }}>
+                          <div className="text-[#e6edf3] font-bold text-[11px]">{value}</div>
+                          <div className="text-[#484f58] text-[8px] mt-0.5">{label}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-[#484f58] text-[9px] mb-3">
+                      Started {fmtDate(save.startedAt)}
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => resumeTournament(save)}
+                        className="flex-1 py-2.5 rounded-xl font-['Syne'] font-bold text-sm text-[#0d0d0d] hover:bg-[#e6b84a] transition-colors"
+                        style={{ background: '#d4a843' }}>
+                        Resume →
+                      </button>
+                      <button onClick={() => setConfirmDeleteId(save.id)}
+                        className="px-3 py-2.5 rounded-xl transition-colors hover:bg-[#f85149]/20 text-[#484f58] hover:text-[#f85149]"
+                        style={{ border: '1px solid #30363d' }}>
+                        🗑
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
-              <button onClick={resumeTournament}
-                className="w-full py-3 rounded-xl font-['Syne'] font-bold text-sm
-                  text-[#0d0d0d] transition-colors hover:bg-[#e6b84a] mb-2"
-                style={{ background: '#d4a843' }}>
-                Resume Tournament →
-              </button>
-              <button onClick={() => { clearSavedGame(); startTournament(selectedMode) }}
-                className="w-full py-2 rounded-xl font-['Syne'] text-sm text-[#484f58]
-                  transition-colors hover:text-[#8b949e]"
-                style={{ border: '1px solid #30363d' }}>
-                Discard &amp; Start New
-              </button>
             </div>
           )}
 
-          <div className="rounded-xl border border-[#30363d] p-3" style={{ background: '#161b22' }}>
-            <div className="text-[#484f58] text-[9px] uppercase tracking-widest font-['Syne'] mb-2">
-              Session Mode
+          {/* ── START NEW ───────────────────────────────── */}
+          <div>
+            <div className="text-[#484f58] text-[10px] uppercase tracking-widest font-['Syne'] mb-2 px-1">
+              New Tournament
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {([
-                { mode: 'full', label: 'Full Tournament', desc: '282 hands, all 47 levels' },
-                { mode: 'day1', label: 'Day 1',           desc: 'Levels 1–22, 198 hands' },
-                { mode: 'day2', label: 'Day 2',           desc: 'Levels 23–39, 153 hands' },
-                { mode: 'day3', label: 'Day 3+',          desc: 'Levels 40–47, 72 hands' },
-              ] as const).map(({ mode, label, desc }) => (
-                <button key={mode} onClick={() => setSelectedMode(mode)}
-                  className="rounded-lg p-2.5 text-left transition-all"
-                  style={{
-                    background: selectedMode === mode ? 'rgba(212,168,67,0.15)' : 'rgba(255,255,255,0.03)',
-                    border: selectedMode === mode ? '1px solid rgba(212,168,67,0.50)' : '1px solid #30363d',
-                  }}>
-                  <div className="font-['Syne'] font-bold text-[11px]"
-                    style={{ color: selectedMode === mode ? '#d4a843' : '#8b949e' }}>
-                    {label}
-                  </div>
-                  <div className="text-[9px] text-[#484f58] mt-0.5">{desc}</div>
-                </button>
-              ))}
+            <div className="rounded-xl border border-[#30363d] p-4" style={{ background: '#161b22' }}>
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                {([
+                  { mode: 'full', label: 'Full Tournament', desc: 'All 47 levels · 423 hands' },
+                  { mode: 'day1', label: 'Day 1',           desc: 'Levels 1-22 · 198 hands' },
+                  { mode: 'day2', label: 'Day 2',           desc: 'Levels 23-39 · 153 hands' },
+                  { mode: 'day3', label: 'Day 3+',          desc: 'Levels 40-47 · 72 hands' },
+                ] as const).map(({ mode, label, desc }) => (
+                  <button key={mode} onClick={() => setSelectedMode(mode)}
+                    className="rounded-lg p-2.5 text-left transition-all"
+                    style={{
+                      background: selectedMode === mode ? 'rgba(212,168,67,0.15)' : 'rgba(255,255,255,0.03)',
+                      border: selectedMode === mode ? '1px solid rgba(212,168,67,0.50)' : '1px solid #30363d',
+                    }}>
+                    <div className="font-['Syne'] font-bold text-[11px]"
+                      style={{ color: selectedMode === mode ? '#d4a843' : '#8b949e' }}>
+                      {label}
+                    </div>
+                    <div className="text-[9px] text-[#484f58] mt-0.5">{desc}</div>
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => startTournament(selectedMode)}
+                className="w-full py-3.5 rounded-xl font-['Syne'] font-bold text-sm text-[#0d0d0d] hover:bg-[#e6b84a] transition-colors"
+                style={{ background: '#d4a843' }}>
+                Start Tournament →
+              </button>
             </div>
           </div>
 
-          {!canResume && (
-            <button onClick={() => startTournament(selectedMode)}
-              className="w-full py-3.5 rounded-xl font-['Syne'] font-bold text-sm
-                text-[#0d0d0d] transition-colors hover:bg-[#e6b84a]"
-              style={{ background: '#d4a843' }}>
-              Start Tournament →
-            </button>
+          {/* ── HISTORY ─────────────────────────────────── */}
+          {completedSaves.length > 0 && (
+            <div>
+              <div className="text-[#484f58] text-[10px] uppercase tracking-widest font-['Syne'] mb-2 px-1">
+                History
+              </div>
+              <div className="space-y-2">
+                {completedSaves.map(save => (
+                  <div key={save.id}
+                    className="rounded-xl border border-[#30363d] p-3 flex items-center gap-3"
+                    style={{ background: '#161b22' }}>
+                    <div className="text-xl flex-shrink-0">
+                      {save.result === 'win' ? '🏆' : '💀'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-[11px]"
+                          style={{ color: save.result === 'win' ? '#d4a843' : '#f85149' }}>
+                          {save.result === 'win' ? 'Won' : 'Busted'}
+                        </span>
+                        <span className="text-[#484f58] text-[9px]">
+                          L{save.finalLevel + 1} · Hand {save.finalHand}
+                        </span>
+                        {save.sessionMaxScore > 0 && (
+                          <span className="text-[#484f58] text-[9px]">
+                            {Math.round(save.sessionScore / save.sessionMaxScore * 100)}%
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[#484f58] text-[9px] mt-0.5">
+                        {fmtDate(save.endedAt)} · {fmtMode(save.mode)}
+                      </div>
+                    </div>
+                    <button onClick={() => setConfirmDeleteId(save.id)}
+                      className="px-2 py-1.5 rounded-lg transition-colors hover:bg-[#f85149]/20 text-[#484f58] hover:text-[#f85149] flex-shrink-0">
+                      🗑
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
+
+        {/* ── DELETE CONFIRMATION ──────────────────────── */}
+        {confirmDeleteId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.80)' }}>
+            <div className="w-full max-w-sm rounded-2xl border border-[#30363d] p-5"
+              style={{ background: '#161b22' }}>
+              <div className="text-[#e6edf3] font-['Syne'] font-bold text-base mb-2">
+                Delete this tournament?
+              </div>
+              <div className="text-[#8b949e] text-sm mb-5">This cannot be undone.</div>
+              <div className="space-y-2">
+                <button onClick={() => {
+                  deleteActiveSave(confirmDeleteId)
+                  deleteCompletedSave(confirmDeleteId)
+                  setActiveSaves(getActiveSaves())
+                  setCompletedSaves(getCompletedSaves())
+                  setConfirmDeleteId(null)
+                }}
+                  className="w-full py-3 rounded-xl font-['Syne'] font-bold text-sm text-white"
+                  style={{ background: '#f85149' }}>
+                  Delete
+                </button>
+                <button onClick={() => setConfirmDeleteId(null)}
+                  className="w-full py-3 rounded-xl text-[#484f58] text-sm hover:text-[#8b949e] transition-colors">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -1581,7 +1682,6 @@ export default function GamePage() {
             </button>
             <button onClick={() => {
               setShowNewTournamentConfirm(false)
-              clearSavedGame()
               startTournament('full')
             }}
               className="flex-1 py-3 rounded-xl font-['Syne'] font-bold text-sm text-white transition-colors"

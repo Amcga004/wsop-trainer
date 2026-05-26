@@ -15,24 +15,112 @@ import {
 } from '../engine/tournamentStructure'
 import { QSCORE, QLABEL, type Quality, type SessionMode, type DecisionRecord } from '../types'
 
-const SAVE_KEY = 'wsop_trainer_save'
+const ACTIVE_SAVES_KEY = 'wsop_active_saves'
+const COMPLETED_SAVES_KEY = 'wsop_completed_saves'
 const DEVICE_KEY = 'wsop_device_id'
 
 function getOrCreateDeviceId(): string {
   try {
-    const existing = localStorage.getItem(DEVICE_KEY)
-    if (existing) return existing
-    const id = [
-      screen.width, screen.height,
-      Intl.DateTimeFormat().resolvedOptions().timeZone,
-      navigator.language,
-      Math.random().toString(36).slice(2, 10),
-    ].join('|')
-    localStorage.setItem(DEVICE_KEY, id)
+    let id = localStorage.getItem(DEVICE_KEY)
+    if (!id) {
+      const rand = Math.random().toString(36).substring(2, 10)
+      const time = Date.now().toString(36)
+      id = `${rand}-${time}`
+      localStorage.setItem(DEVICE_KEY, id)
+    }
     return id
-  } catch {
-    return 'unknown'
-  }
+  } catch { return 'unknown' }
+}
+
+// ─────────────────────────────────────────────────────────────
+// SAVE TYPES
+// ─────────────────────────────────────────────────────────────
+
+export interface ActiveSave {
+  id: string
+  startedAt: number
+  savedAt: number
+  heroStack: number
+  levelIndex: number
+  totalHands: number
+  sessionScore: number
+  sessionMaxScore: number
+  playersLeft: number
+  heroSeatIndex: number
+  dealerButton: number
+  mode: string
+  deviceId: string
+  tableSeats: Array<{ seatIndex: number; stack: number; archetype: string }>
+}
+
+export interface CompletedSave {
+  id: string
+  startedAt: number
+  endedAt: number
+  result: 'bust' | 'win'
+  finalLevel: number
+  finalHand: number
+  finalStack: number
+  sessionScore: number
+  sessionMaxScore: number
+  mode: string
+}
+
+function getAllActiveSaves(): ActiveSave[] {
+  try {
+    const raw = localStorage.getItem(ACTIVE_SAVES_KEY)
+    if (!raw) return []
+    return JSON.parse(raw) as ActiveSave[]
+  } catch { return [] }
+}
+
+function getAllCompletedSaves(): CompletedSave[] {
+  try {
+    const raw = localStorage.getItem(COMPLETED_SAVES_KEY)
+    if (!raw) return []
+    return JSON.parse(raw) as CompletedSave[]
+  } catch { return [] }
+}
+
+export function getActiveSaves(): ActiveSave[] {
+  const deviceId = getOrCreateDeviceId()
+  return getAllActiveSaves().filter(s => s.deviceId === deviceId)
+}
+
+export function getCompletedSaves(): CompletedSave[] {
+  return getAllCompletedSaves()
+}
+
+function upsertActiveSave(save: ActiveSave): void {
+  try {
+    const all = getAllActiveSaves()
+    const idx = all.findIndex(s => s.id === save.id)
+    if (idx >= 0) all[idx] = save
+    else all.unshift(save)
+    localStorage.setItem(ACTIVE_SAVES_KEY, JSON.stringify(all))
+  } catch {}
+}
+
+export function deleteActiveSave(id: string): void {
+  try {
+    const all = getAllActiveSaves().filter(s => s.id !== id)
+    localStorage.setItem(ACTIVE_SAVES_KEY, JSON.stringify(all))
+  } catch {}
+}
+
+function addCompletedSave(save: CompletedSave): void {
+  try {
+    const all = getAllCompletedSaves()
+    all.unshift(save)
+    localStorage.setItem(COMPLETED_SAVES_KEY, JSON.stringify(all.slice(0, 20)))
+  } catch {}
+}
+
+export function deleteCompletedSave(id: string): void {
+  try {
+    const all = getAllCompletedSaves().filter(s => s.id !== id)
+    localStorage.setItem(COMPLETED_SAVES_KEY, JSON.stringify(all))
+  } catch {}
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -65,6 +153,7 @@ export interface GameState {
   phase:            GamePhase
   mode:             SessionMode
   tournamentId:     string | null
+  startedAt:        number
 
   // Tournament progression
   levelIndex:       number
@@ -115,6 +204,7 @@ function makeInitialState(mode: SessionMode): GameState {
     phase:            'lobby',
     mode,
     tournamentId:     null,
+    startedAt:        0,
     levelIndex:       startLevel,
     handInLevel:      0,
     totalHands:       0,
@@ -238,6 +328,7 @@ export function useGameState(initialMode: SessionMode = 'full') {
         ...fresh,
         phase:        finalEngine.isOver ? 'recap' : 'playing',
         tournamentId,
+        startedAt:    Date.now(),
         dealerButton: btn,
         engine:       finalEngine,
         heroStack:    finalEngine.heroSeat.stack,
@@ -683,6 +774,19 @@ export function useGameState(initialMode: SessionMode = 'full') {
   const finalizeTournament = useCallback(async (cashed: boolean) => {
     const s = stateRef.current
     if (!s.tournamentId) return
+    deleteActiveSave(s.tournamentId)
+    addCompletedSave({
+      id:             s.tournamentId,
+      startedAt:      s.startedAt,
+      endedAt:        Date.now(),
+      result:         cashed ? 'win' : 'bust',
+      finalLevel:     s.levelIndex,
+      finalHand:      s.totalHands,
+      finalStack:     s.heroStack,
+      sessionScore:   s.sessionScore,
+      sessionMaxScore: s.sessionMaxScore,
+      mode:           s.mode ?? 'full',
+    })
     await endTournament(
       s.tournamentId, s.heroStack, s.levelIndex,
       s.sessionScore, s.sessionMaxScore,
@@ -691,138 +795,94 @@ export function useGameState(initialMode: SessionMode = 'full') {
     )
   }, [])
 
-  // ── localStorage save/resume ──────────────────────────────
-  const hasSavedGame = useCallback((): boolean => {
-    try {
-      const raw = localStorage.getItem(SAVE_KEY)
-      if (!raw) return false
-      const data = JSON.parse(raw)
-      if (Date.now() - data.savedAt >= 24 * 60 * 60 * 1000) return false
-      if (data.deviceId && data.deviceId !== getOrCreateDeviceId()) return false
-      return true
-    } catch {
-      return false
-    }
-  }, [])
-
-  const clearSavedGame = useCallback(() => {
-    localStorage.removeItem(SAVE_KEY)
-  }, [])
-
+  // ── Manual save (from menu) ───────────────────────────────
   const saveTournament = useCallback(() => {
-    try {
-      const s = stateRef.current
-      if (s.phase !== 'playing' && s.phase !== 'recap') return
-      const saveData = {
-        heroStack:       s.heroStack,
-        levelIndex:      s.levelIndex,
-        playersLeft:     s.playersLeft,
-        totalHands:      s.totalHands,
-        sessionScore:    s.sessionScore,
-        sessionMaxScore: s.sessionMaxScore,
-        dealerButton:    s.dealerButton,
-        heroSeatIndex:   s.heroSeatIndex,
-        tableSeats:      s.tableSeats.map(seat => ({
-          seatIndex: seat.seatIndex,
-          stack:     seat.stack,
-          archetype: seat.archetype,
-        })),
-        deviceId: getOrCreateDeviceId(),
-        savedAt:  Date.now(),
-      }
-      localStorage.setItem(SAVE_KEY, JSON.stringify(saveData))
-    } catch {
-      // Ignore storage errors
-    }
+    const s = stateRef.current
+    if (!s.tournamentId) return
+    if (s.phase !== 'playing' && s.phase !== 'recap') return
+    upsertActiveSave({
+      id:             s.tournamentId,
+      startedAt:      s.startedAt,
+      savedAt:        Date.now(),
+      heroStack:      s.heroStack,
+      levelIndex:     s.levelIndex,
+      totalHands:     s.totalHands,
+      sessionScore:   s.sessionScore,
+      sessionMaxScore: s.sessionMaxScore,
+      playersLeft:    s.playersLeft,
+      heroSeatIndex:  s.heroSeatIndex,
+      dealerButton:   s.dealerButton,
+      mode:           s.mode ?? 'full',
+      deviceId:       getOrCreateDeviceId(),
+      tableSeats:     s.tableSeats.map(seat => ({
+        seatIndex: seat.seatIndex,
+        stack:     seat.stack,
+        archetype: seat.archetype,
+      })),
+    })
   }, [])
 
-  const getSavedGameInfo = useCallback((): {
-    heroStack: number; levelIndex: number; totalHands: number;
-    sessionScore: number; sessionMaxScore: number; savedAt: number
-  } | null => {
+  // ── Resume from saved game ────────────────────────────────
+  const resumeTournament = useCallback((save: ActiveSave) => {
     try {
-      const raw = localStorage.getItem(SAVE_KEY)
-      if (!raw) return null
-      const data = JSON.parse(raw)
-      if (Date.now() - data.savedAt >= 24 * 60 * 60 * 1000) return null
-      if (data.deviceId && data.deviceId !== getOrCreateDeviceId()) return null
-      return {
-        heroStack:       data.heroStack,
-        levelIndex:      data.levelIndex,
-        totalHands:      data.totalHands,
-        sessionScore:    data.sessionScore,
-        sessionMaxScore: data.sessionMaxScore,
-        savedAt:         data.savedAt,
-      }
-    } catch {
-      return null
-    }
-  }, [])
-
-  const resumeTournament = useCallback(() => {
-    try {
-      const raw = localStorage.getItem(SAVE_KEY)
-      if (!raw) return
-      const data = JSON.parse(raw)
-      const heroSeatIndex = data.heroSeatIndex ?? 4
       const newDealerButton = getDealerButtonForHand(
-        data.totalHands % HANDS_PER_LEVEL,
-        heroSeatIndex
+        save.totalHands % HANDS_PER_LEVEL,
+        save.heroSeatIndex
       )
-      const rawSeats = createTable(data.heroStack)
-      const positioned = assignPositions(rawSeats, newDealerButton)
-      const seatsWithStacks = positioned.map((seat, i) => {
-        if (i === heroSeatIndex) return { ...seat, stack: data.heroStack }
-        const saved = data.tableSeats?.find((s: { seatIndex: number }) => s.seatIndex === i)
-        return { ...seat, stack: saved?.stack ?? data.heroStack }
+      const rawSeats = createTable(save.heroStack)
+      const seats = assignPositions(rawSeats, newDealerButton)
+      const seatsWithStacks = seats.map((seat, i) => {
+        if (i === save.heroSeatIndex) return { ...seat, stack: save.heroStack }
+        const saved = save.tableSeats?.find(s => s.seatIndex === i)
+        return { ...seat, stack: saved?.stack ?? save.heroStack }
       })
-      const engine = createHand(seatsWithStacks, heroSeatIndex, data.levelIndex, data.playersLeft)
-      setState(prev => ({
-        ...makeInitialState(prev.mode),
+      const engine = createHand(seatsWithStacks, save.heroSeatIndex, save.levelIndex, save.playersLeft)
+      setState(() => ({
+        ...makeInitialState((save.mode as SessionMode) ?? 'full'),
         engine,
-        heroStack:       data.heroStack,
-        levelIndex:      data.levelIndex,
-        playersLeft:     data.playersLeft,
-        totalHands:      data.totalHands,
-        sessionScore:    data.sessionScore,
-        sessionMaxScore: data.sessionMaxScore,
+        tournamentId:    save.id,
+        startedAt:       save.startedAt,
+        heroStack:       save.heroStack,
+        levelIndex:      save.levelIndex,
+        playersLeft:     save.playersLeft,
+        totalHands:      save.totalHands,
+        sessionScore:    save.sessionScore,
+        sessionMaxScore: save.sessionMaxScore,
         dealerButton:    newDealerButton,
-        heroSeatIndex,
+        heroSeatIndex:   save.heroSeatIndex,
         tableSeats:      seatsWithStacks,
         phase:           'playing',
+        mode:            (save.mode as SessionMode) ?? 'full',
       }))
-      localStorage.removeItem(SAVE_KEY)
     } catch (e) {
       console.warn('Could not resume tournament', e)
-      localStorage.removeItem(SAVE_KEY)
     }
   }, [])
 
   // Auto-save after each hand completes
   useEffect(() => {
-    if (state.phase === 'recap' || state.phase === 'playing') {
-      try {
-        const saveData = {
-          heroStack:       state.heroStack,
-          levelIndex:      state.levelIndex,
-          playersLeft:     state.playersLeft,
-          totalHands:      state.totalHands,
-          sessionScore:    state.sessionScore,
-          sessionMaxScore: state.sessionMaxScore,
-          dealerButton:    state.dealerButton,
-          heroSeatIndex:   state.heroSeatIndex,
-          tableSeats:      state.tableSeats.map(s => ({
-            seatIndex: s.seatIndex,
-            stack:     s.stack,
-            archetype: s.archetype,
-          })),
-          deviceId: getOrCreateDeviceId(),
-          savedAt:  Date.now(),
-        }
-        localStorage.setItem(SAVE_KEY, JSON.stringify(saveData))
-      } catch {
-        // Ignore storage errors
-      }
+    if (state.phase === 'playing' || state.phase === 'recap') {
+      if (!state.tournamentId) return
+      upsertActiveSave({
+        id:             state.tournamentId,
+        startedAt:      state.startedAt,
+        savedAt:        Date.now(),
+        heroStack:      state.heroStack,
+        levelIndex:     state.levelIndex,
+        totalHands:     state.totalHands,
+        sessionScore:   state.sessionScore,
+        sessionMaxScore: state.sessionMaxScore,
+        playersLeft:    state.playersLeft,
+        heroSeatIndex:  state.heroSeatIndex,
+        dealerButton:   state.dealerButton,
+        mode:           state.mode ?? 'full',
+        deviceId:       getOrCreateDeviceId(),
+        tableSeats:     state.tableSeats.map(s => ({
+          seatIndex: s.seatIndex,
+          stack:     s.stack,
+          archetype: s.archetype,
+        })),
+      })
     }
   }, [state.totalHands, state.phase])
 
@@ -846,10 +906,11 @@ export function useGameState(initialMode: SessionMode = 'full') {
     continueTournament,
     finalizeTournament,
     resumeTournament,
-    hasSavedGame,
-    clearSavedGame,
     saveTournament,
-    getSavedGameInfo,
+    getActiveSaves,
+    getCompletedSaves,
+    deleteActiveSave,
+    deleteCompletedSave,
     bb, sb, ante, bbDepth, day, nearBubble, scorePct,
   }
 }
