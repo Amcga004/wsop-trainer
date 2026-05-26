@@ -266,7 +266,7 @@ function TableVisual({ engine, heroSeatIndex, compact = false, onSeatClick }: {
   engine: NonNullable<ReturnType<typeof useGameState>['state']['engine']>
   heroSeatIndex: number
   compact?: boolean
-  onSeatClick?: (pos: string) => void
+  onSeatClick?: (pos: string, stack: number) => void
 }) {
   const seats = engine.seats
   const heroSeat = seats[heroSeatIndex]
@@ -377,10 +377,11 @@ function TableVisual({ engine, heroSeatIndex, compact = false, onSeatClick }: {
         const isActive = !seat.folded
 
         return (
-          <div key={seat.seatIndex} className="absolute z-20"
+          <div key={seat.seatIndex}
+            className="absolute z-20 transition-opacity hover:opacity-80 active:opacity-60"
             style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -50%)',
               cursor: onSeatClick ? 'pointer' : 'default' }}
-            onClick={() => onSeatClick?.(seat.position)}>
+            onClick={() => onSeatClick?.(seat.position, seat.stack)}>
             <div className="relative">
 
             {isHero ? (
@@ -887,7 +888,7 @@ export default function GamePage() {
   const [selectedMode, setSelectedMode] =
     useState<'full' | 'day1' | 'day2' | 'day3'>('full')
   const [canResume, setCanResume] = useState(false)
-  const [rangeViewerPos, setRangeViewerPos] = useState<string | null>(null)
+  const [rangeViewerSeat, setRangeViewerSeat] = useState<{ position: string; depth: number } | null>(null)
 
   const {
     state, startTournament, takeAction, continueAfterOutcome,
@@ -905,7 +906,7 @@ export default function GamePage() {
   useEffect(() => { startTournament('full') }, [])
   useEffect(() => { setCanResume(hasSavedGame()) }, [])
   useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setRangeViewerPos(null) }
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setRangeViewerSeat(null) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
@@ -1409,6 +1410,16 @@ export default function GamePage() {
 
   // ── Playing / Outcome ─────────────────────────────────────
   return (
+    <>
+    {rangeViewerSeat && (
+      <RangeMatrix
+        key={rangeViewerSeat.position}
+        pos={rangeViewerSeat.position}
+        bbDepth={rangeViewerSeat.depth}
+        heroCards={engine.heroSeat.holeCards}
+        onClose={() => setRangeViewerSeat(null)}
+      />
+    )}
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: '#0d1117' }}>
 
       {/* Desktop header */}
@@ -1449,7 +1460,9 @@ export default function GamePage() {
         <div className="flex-1 flex flex-col justify-center items-center p-6 min-h-0">
           <div className="w-full max-w-xl">
             <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={false}
-              onSeatClick={setRangeViewerPos} />
+              onSeatClick={(position, stack) =>
+                setRangeViewerSeat({ position, depth: bb > 0 ? Math.floor(stack / bb) : bbDepth })
+              } />
           </div>
           {(decision || lastDecision) && (
             <div className="w-full max-w-xl mt-3 rounded-xl border-l-2 border-[#d4a843] px-4 py-2.5"
@@ -1498,7 +1511,9 @@ export default function GamePage() {
       <div className="flex-1 overflow-y-auto lg:hidden">
         <div className="px-2 pt-2">
           <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={true}
-            onSeatClick={setRangeViewerPos} />
+            onSeatClick={(position, stack) =>
+              setRangeViewerSeat({ position, depth: bb > 0 ? Math.floor(stack / bb) : bbDepth })
+            } />
         </div>
 
         <div className="p-3 space-y-3">
@@ -1598,15 +1613,7 @@ export default function GamePage() {
         </div>
       </div>
 
-      {rangeViewerPos && (
-        <RangeMatrix
-          key={rangeViewerPos}
-          pos={rangeViewerPos}
-          bbDepth={bbDepth}
-          heroCards={engine.heroSeat.holeCards}
-          onClose={() => setRangeViewerPos(null)}
-        />
-      )}
     </div>
+    </>
   )
 }
