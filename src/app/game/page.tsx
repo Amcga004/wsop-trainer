@@ -117,19 +117,89 @@ const TAB_COLORS: Record<string, string> = {
   rfi: '#3fb950', vsRaiseCall: '#1f6feb', threebet: '#d4a843',
   vs3betCall: '#8b5cf6', fourbet: '#f85149', shove: '#f85149', callShove: '#3fb950',
 }
+type TabKey = 'rfi' | 'vsRaiseCall' | 'threebet' | 'vs3betCall' | 'fourbet' | 'shove' | 'callShove'
 
-function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
+// Convert a hand string like "AKs","TT","87o" to two cards, avoiding board cards
+function handStringToCards(
+  handStr: string,
+  board: { r: string; s: string }[]
+): [{ r: string; s: string }, { r: string; s: string }] | null {
+  const ALL_SUITS = ['♠','♥','♦','♣']
+  const boardKeys = new Set(board.map(c => c.r + c.s))
+  function availSuit(rank: string, excludeSuits: string[] = []): string | null {
+    for (const s of ALL_SUITS) {
+      if (!excludeSuits.includes(s) && !boardKeys.has(rank + s)) return s
+    }
+    return null
+  }
+  const isPair = handStr.length === 2 && handStr[0] === handStr[1]
+  const isSuited = handStr.endsWith('s')
+  const isOffsuit = handStr.endsWith('o')
+  if (isPair) {
+    const rank = handStr[0]
+    const s1 = availSuit(rank)
+    if (!s1) return null
+    const s2 = availSuit(rank, [s1])
+    if (!s2) return null
+    return [{ r: rank, s: s1 }, { r: rank, s: s2 }]
+  }
+  if (isSuited) {
+    const r1 = handStr[0], r2 = handStr[1]
+    for (const suit of ALL_SUITS) {
+      if (!boardKeys.has(r1 + suit) && !boardKeys.has(r2 + suit)) {
+        return [{ r: r1, s: suit }, { r: r2, s: suit }]
+      }
+    }
+    return null
+  }
+  if (isOffsuit) {
+    const r1 = handStr[0], r2 = handStr[1]
+    const s1 = availSuit(r1)
+    if (!s1) return null
+    const s2 = availSuit(r2, [s1])
+    if (!s2) return null
+    return [{ r: r1, s: s1 }, { r: r2, s: s2 }]
+  }
+  return null
+}
+
+type BoardCategory = 'strong' | 'marginal' | 'air'
+
+function getBoardCategory(handStr: string, board: { r: string; s: string }[]): BoardCategory {
+  if (board.length < 3) return 'air'
+  const cards = handStringToCards(handStr, board)
+  if (!cards) return 'air'
+  const hs = evalHand(cards[0], cards[1], board)
+  if (hs.str >= 2) return 'strong'
+  if (hs.str === 1 && (hs.pairPos === 'toppair' || hs.pairPos === 'overpair')) return 'strong'
+  if (hs.str === 1) return 'marginal'
+  if (hs.heroFD || hs.oesd || hs.gut) return 'marginal'
+  if (hs.overcards >= 2) return 'marginal'
+  return 'air'
+}
+
+function buildHandStrFromCards(c1: { r: string; s: string }, c2: { r: string; s: string }): string {
+  const RANK_ORDER = 'AKQJT98765432'.split('')
+  const i1 = RANK_ORDER.indexOf(c1.r), i2 = RANK_ORDER.indexOf(c2.r)
+  const [hi, lo, hiS, loS] = i1 <= i2 ? [c1.r, c2.r, c1.s, c2.s] : [c2.r, c1.r, c2.s, c1.s]
+  if (hi === lo) return `${hi}${lo}`
+  return `${hi}${lo}${hiS === loS ? 's' : 'o'}`
+}
+
+function RangeMatrix({ pos, bbDepth, heroCards, board, defaultTab, onClose }: {
   pos: string
   bbDepth: number
   heroCards?: { r: string; s: string }[] | null
+  board?: { r: string; s: string }[]
+  defaultTab?: TabKey
   onClose: () => void
 }) {
   const VALID_POSITIONS = ['UTG','UTG1','UTG2','LJ','HJ','CO','BTN','SB','BB']
   const safePos = (VALID_POSITIONS.includes(pos) ? pos : 'BTN') as Position
   const isShoveDepth = bbDepth < 20
+  const hasBoard = (board?.length ?? 0) >= 3
 
-  type TabKey = 'rfi' | 'vsRaiseCall' | 'threebet' | 'vs3betCall' | 'fourbet' | 'shove' | 'callShove'
-  const [tab, setTab] = useState<TabKey>(isShoveDepth ? 'shove' : 'rfi')
+  const [tab, setTab] = useState<TabKey>(defaultTab ?? (isShoveDepth ? 'shove' : 'rfi'))
   const [hoveredHand, setHoveredHand] = useState<string | null>(null)
 
   const rangeSet = getRanges(safePos, bbDepth)
@@ -166,6 +236,18 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
     return sum + 12
   }, 0)
 
+  const postflopStats = hasBoard ? (() => {
+    let strong = 0, marginal = 0, air = 0
+    for (const hand of currentRange) {
+      const combos = hand.length === 2 ? 6 : hand.endsWith('s') ? 4 : 12
+      const cat = getBoardCategory(hand, board!)
+      if (cat === 'strong') strong += combos
+      else if (cat === 'marginal') marginal += combos
+      else air += combos
+    }
+    return { strong, marginal, air, total: strong + marginal + air }
+  })() : null
+
   const tabs: { key: TabKey; label: string }[] = isShoveDepth
     ? [{ key: 'shove', label: 'Shove' }, { key: 'callShove', label: 'Call' }]
     : [
@@ -197,11 +279,24 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
     return 'Call Shove'
   }
 
+  function cellStyle(hand: string): React.CSSProperties {
+    const isHero = heroCell === hand
+    const inR = inRangeSet.has(hand)
+    if (isHero) return { background: '#d4a843', border: '2px solid #f0c040', color: '#0d0d0d' }
+    if (!inR) return { background: 'rgba(255,255,255,0.03)', border: '1px solid transparent', color: '#30363d' }
+    if (!hasBoard) return { background: activeColor + '35', border: `1px solid ${activeColor}70`, color: activeColor }
+    const cat = getBoardCategory(hand, board!)
+    if (cat === 'strong')   return { background: '#1a4a1a', border: '1px solid #3fb95070', color: '#3fb950' }
+    if (cat === 'marginal') return { background: '#3a2800', border: '1px solid #d4a84370', color: '#d4a843' }
+    return { background: '#2a0a0a', border: '1px solid #f8514970', color: '#f85149' }
+  }
+
   const hoveredInfo = hoveredHand ? {
     hand: hoveredHand,
     inR: inRangeSet.has(hoveredHand),
     color: heroCell === hoveredHand ? '#d4a843' : inRangeSet.has(hoveredHand) ? activeColor : '#484f58',
     type: hoveredHand.length === 2 ? 'Pocket pair' : hoveredHand.endsWith('s') ? 'Suited' : 'Offsuit',
+    cat: hasBoard && inRangeSet.has(hoveredHand) ? getBoardCategory(hoveredHand, board!) : null,
   } : null
 
   return (
@@ -213,9 +308,14 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
 
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-baseline gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[#d4a843] font-['Syne'] font-bold text-lg">{pos}</span>
-            <span className="text-[#484f58] text-[11px]">Preflop ranges · {bbDepth}BB</span>
+            <span className="text-[#484f58] text-[11px]">{hasBoard ? 'Postflop' : 'Preflop'} · {bbDepth}BB</span>
+            {hasBoard && board && (
+              <div className="flex gap-1">
+                {board.map((c, i) => <Card key={i} r={c.r} s={c.s} size="xs" />)}
+              </div>
+            )}
           </div>
           <button onClick={onClose}
             className="w-7 h-7 rounded-full flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3] transition-colors"
@@ -253,6 +353,7 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
               </div>
               <div className="text-[#484f58] text-[10px] mt-0.5">
                 {hoveredInfo.type} · {pos} · {bbDepth}BB
+                {hoveredInfo.cat && ` · ${hoveredInfo.cat}`}
               </div>
             </div>
             <div className="ml-auto rounded-lg px-2.5 py-1 text-[11px] font-bold flex-shrink-0"
@@ -267,10 +368,29 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
           </div>
         )}
 
-        {/* Stats */}
+        {/* Stats row */}
         <div className="text-[10px] text-[#484f58] mb-2">
           {totalCombos} combos · {Math.round(totalCombos / 1326 * 100)}% of hands
         </div>
+
+        {/* Postflop breakdown */}
+        {postflopStats && postflopStats.total > 0 && (
+          <div className="flex gap-1.5 mb-2">
+            {([
+              { label: 'Strong',   count: postflopStats.strong,   color: '#3fb950' },
+              { label: 'Marginal', count: postflopStats.marginal, color: '#d4a843' },
+              { label: 'Air',      count: postflopStats.air,      color: '#f85149' },
+            ] as { label: string; count: number; color: string }[]).map(({ label, count, color }) => (
+              <div key={label} className="flex-1 rounded-lg px-1.5 py-1 text-center"
+                style={{ background: color + '15', border: `1px solid ${color}30` }}>
+                <div className="font-bold text-[11px]" style={{ color }}>
+                  {Math.round(count / postflopStats.total * 100)}%
+                </div>
+                <div className="text-[9px] text-[#484f58]">{label}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Column rank headers */}
         <div className="grid mb-0.5" style={{ gridTemplateColumns: '14px repeat(13, 1fr)', gap: 2 }}>
@@ -280,20 +400,15 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
           ))}
         </div>
 
-        {/* 13×13 grid with row headers */}
+        {/* 13×13 grid */}
         {GRID_RANKS.map((r1, i) => (
           <div key={r1} className="grid mb-[2px]"
             style={{ gridTemplateColumns: '14px repeat(13, 1fr)', gap: 2, overflow: 'visible' }}>
             <div className="flex items-center justify-center text-[#484f58]" style={{ fontSize: 6 }}>{r1}</div>
             {GRID_RANKS.map((r2, j) => {
-              const hand = i === j
-                ? r1 + r1
-                : j > i
-                  ? r1 + r2 + 's'
-                  : r2 + r1 + 'o'
-              const inR = inRangeSet.has(hand)
-              const isHero = heroCell === hand
+              const hand = i === j ? r1 + r1 : j > i ? r1 + r2 + 's' : r2 + r1 + 'o'
               const isHovered = hoveredHand === hand
+              const cs = cellStyle(hand)
               return (
                 <div key={j} title={hand}
                   onMouseEnter={() => setHoveredHand(hand)}
@@ -305,13 +420,11 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
                   style={{
                     aspectRatio: '1',
                     borderRadius: 2,
-                    background: isHero ? '#d4a843' : inR ? activeColor + '35' : 'rgba(255,255,255,0.03)',
-                    border: `1px solid ${isHero ? '#d4a843' : inR ? activeColor + '70' : 'transparent'}`,
+                    ...cs,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontSize: 4,
-                    color: isHero ? '#0d0d0d' : inR ? activeColor : '#30363d',
                     transform: isHovered ? 'scale(1.4)' : 'scale(1)',
                     zIndex: isHovered ? 10 : 1,
                     transition: 'transform 0.1s ease',
@@ -326,13 +439,30 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
 
         {/* Legend */}
         <div className="flex gap-3 mt-3 flex-wrap">
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded-sm" style={{ background: activeColor + '35', border: `1px solid ${activeColor}70` }} />
-            <span className="text-[9px] text-[#484f58]">In range</span>
-          </div>
+          {hasBoard ? (
+            <>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: '#1a4a1a', border: '1px solid #3fb95070' }} />
+                <span className="text-[9px] text-[#484f58]">Strong</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: '#3a2800', border: '1px solid #d4a84370' }} />
+                <span className="text-[9px] text-[#484f58]">Marginal</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: '#2a0a0a', border: '1px solid #f8514970' }} />
+                <span className="text-[9px] text-[#484f58]">Air</span>
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-sm" style={{ background: activeColor + '35', border: `1px solid ${activeColor}70` }} />
+              <span className="text-[9px] text-[#484f58]">In range</span>
+            </div>
+          )}
           {heroCell && (
             <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-sm" style={{ background: '#d4a843' }} />
+              <div className="w-3 h-3 rounded-sm" style={{ background: '#d4a843', border: '2px solid #f0c040' }} />
               <span className="text-[9px] text-[#484f58]">
                 Your hand ({heroCell}){inRangeSet.has(heroCell) ? ' ✓ in range' : ' — not in range'}
               </span>
@@ -965,7 +1095,7 @@ function RightPanelOutcome({ lastOption, lastDecision, lastChipDelta, engine, co
 export default function GamePage() {
   const [selectedMode, setSelectedMode] =
     useState<'full' | 'day1' | 'day2' | 'day3'>('full')
-  const [rangeViewerSeat, setRangeViewerSeat] = useState<{ position: string; depth: number } | null>(null)
+  const [rangeViewerSeat, setRangeViewerSeat] = useState<{ position: string; depth: number; board?: { r: string; s: string }[]; defaultTab?: TabKey } | null>(null)
   const [showMenu, setShowMenu] = useState(false)
   const [showNewTournamentConfirm, setShowNewTournamentConfirm] = useState(false)
   const [showSavedToast, setShowSavedToast] = useState(false)
@@ -1626,6 +1756,8 @@ export default function GamePage() {
         pos={rangeViewerSeat.position}
         bbDepth={rangeViewerSeat.depth}
         heroCards={engine.heroSeat.holeCards}
+        board={rangeViewerSeat.board}
+        defaultTab={rangeViewerSeat.defaultTab}
         onClose={() => setRangeViewerSeat(null)}
       />
     )}
@@ -1742,9 +1874,13 @@ export default function GamePage() {
         <div className="flex-1 flex flex-col justify-center items-center p-6 min-h-0">
           <div className="w-full max-w-xl">
             <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={false}
-              onSeatClick={(position, stack) =>
-                setRangeViewerSeat({ position, depth: bb > 0 ? Math.floor(stack / bb) : bbDepth })
-              } />
+              onSeatClick={(position, stack) => {
+                const actionCode = engine.villainProfiles.find(p => p.position === position)?.actionSequence[0]
+                const defaultTab: TabKey | undefined =
+                  actionCode === 'rfi' ? 'rfi' : actionCode === 'call' ? 'vsRaiseCall' :
+                  actionCode === '3bet' ? 'threebet' : actionCode === '4bet' ? 'fourbet' : undefined
+                setRangeViewerSeat({ position, depth: bb > 0 ? Math.floor(stack / bb) : bbDepth, board: engine.board, defaultTab })
+              }} />
           </div>
           {(decision || lastDecision) && (
             <div className="w-full max-w-xl mt-3 rounded-xl border-l-2 border-[#d4a843] px-4 py-2.5"
@@ -1794,9 +1930,13 @@ export default function GamePage() {
         {/* Table — fixed height */}
         <div className="flex-shrink-0 px-2 pt-1">
           <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={true}
-            onSeatClick={(position, stack) =>
-              setRangeViewerSeat({ position, depth: bb > 0 ? Math.floor(stack / bb) : bbDepth })
-            } />
+            onSeatClick={(position, stack) => {
+              const actionCode = engine.villainProfiles.find(p => p.position === position)?.actionSequence[0]
+              const defaultTab: TabKey | undefined =
+                actionCode === 'rfi' ? 'rfi' : actionCode === 'call' ? 'vsRaiseCall' :
+                actionCode === '3bet' ? 'threebet' : actionCode === '4bet' ? 'fourbet' : undefined
+              setRangeViewerSeat({ position, depth: bb > 0 ? Math.floor(stack / bb) : bbDepth, board: engine.board, defaultTab })
+            }} />
         </div>
 
         {/* Playing phase — everything fits without scroll */}
