@@ -8,7 +8,8 @@ import { compareHands } from '../engine/handEval'
 import {
   getBB, getSB, getAnte, getDealerButtonForHand,
   HANDS_PER_LEVEL, STARTING_STACK, getBBDepth, ITM_PLAYERS,
-  getPayout, verifyPayoutTable,
+  getPayoutForPlace, verifyPayoutTable,
+  getPlayersLeftAtLevelStart, randomPartition,
 } from '../engine/tournamentStructure'
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -1265,24 +1266,61 @@ describe('Flop call continues to turn', () => {
 // ── SUITE: Payout table ───────────────────────────────────────
 describe('Payout table', () => {
   it('1st place pays $1.3M', () => {
-    expect(getPayout(1)).toBe(1_300_000)
+    expect(getPayoutForPlace(1)).toBe(1_300_000)
   })
 
   it('Min cash pays $1,450', () => {
-    expect(getPayout(1891)).toBe(1_450)
+    expect(getPayoutForPlace(1891)).toBe(1_450)
   })
 
   it('Place 2160 pays $1,450', () => {
-    expect(getPayout(2160)).toBe(1_450)
+    expect(getPayoutForPlace(2160)).toBe(1_450)
   })
 
   it('Place 2161 pays $0 (out of the money)', () => {
-    expect(getPayout(2161)).toBe(0)
+    expect(getPayoutForPlace(2161)).toBe(0)
   })
 
   it('Total prize pool is within 5% of $16,200,000', () => {
     const total = verifyPayoutTable()
     expect(total).toBeGreaterThan(16_200_000 * 0.95)
     expect(total).toBeLessThan(16_200_000 * 1.05)
+  })
+})
+
+// ── SUITE: Field reduction and payouts ───────────────────────
+describe('Field reduction and payouts', () => {
+  it('getPlayersLeftAtLevelStart decreases monotonically', () => {
+    let prev = 18000
+    for (let i = 1; i <= 47; i++) {
+      const curr = getPlayersLeftAtLevelStart(i)
+      expect(curr).toBeLessThanOrEqual(prev)
+      prev = curr
+    }
+  })
+
+  it('randomPartition sums to total', () => {
+    for (let trial = 0; trial < 20; trial++) {
+      const total = Math.floor(Math.random() * 500)
+      const parts = randomPartition(total, 9)
+      expect(parts.length).toBe(9)
+      expect(parts.reduce((a, b) => a + b, 0)).toBe(total)
+      parts.forEach(p => expect(p).toBeGreaterThanOrEqual(0))
+    }
+  })
+
+  it('Level 17 puts us at the money line', () => {
+    expect(getPlayersLeftAtLevelStart(17)).toBeLessThanOrEqual(2160)
+    expect(getPlayersLeftAtLevelStart(16)).toBeGreaterThan(2160)
+  })
+
+  it('Level 44 is the final table', () => {
+    expect(getPlayersLeftAtLevelStart(44)).toBe(9)
+  })
+
+  it('getPayoutForPlace returns correct values', () => {
+    expect(getPayoutForPlace(1)).toBe(1_300_000)
+    expect(getPayoutForPlace(2160)).toBe(1_450)
+    expect(getPayoutForPlace(2161)).toBe(0)
   })
 })

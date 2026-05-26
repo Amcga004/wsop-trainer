@@ -207,7 +207,7 @@ export const PAYOUT_TABLE: [number, number, number][] = [
   [1891, 2160,     1_450],
 ]
 
-export function getPayout(place: number): number {
+export function getPayoutForPlace(place: number): number {
   for (const [from, to, prize] of PAYOUT_TABLE) {
     if (place >= from && place <= to) return prize
   }
@@ -220,4 +220,84 @@ export function verifyPayoutTable(): number {
     total += (to - from + 1) * prize
   }
   return total
+}
+
+// Players remaining at the START of each level (index 0 = before level 0 begins)
+// Defines tournament pace: fast early eliminations, grinding slower ITM
+export function getPlayersLeftAtLevelStart(levelIndex: number): number {
+  const curve: number[] = [
+    18000, // level 0 start
+    15000, // level 1
+    12500, // level 2
+    10500, // level 3
+     9000, // level 4
+     7800, // level 5
+     6800, // level 6
+     5900, // level 7
+     5100, // level 8
+     4400, // level 9
+     3800, // level 10
+     3300, // level 11
+     2900, // level 12
+     2650, // level 13
+     2450, // level 14
+     2300, // level 15
+     2200, // level 16 (bubble zone starts ~2460)
+     2160, // level 17 (at the money line)
+     2050, // level 18
+     1900, // level 19
+     1750, // level 20
+     1600, // level 21
+     1450, // level 22 (day 2 starts)
+     1300, // level 23
+     1150, // level 24
+     1000, // level 25
+      870, // level 26
+      750, // level 27
+      640, // level 28
+      540, // level 29
+      450, // level 30
+      370, // level 31
+      300, // level 32
+      243, // level 33
+      189, // level 34
+      144, // level 35
+      108, // level 36
+       81, // level 37
+       63, // level 38
+       45, // level 39 (day 3 starts)
+       36, // level 40
+       27, // level 41 (3 tables = near final table)
+       18, // level 42
+       12, // level 43
+        9, // level 44 (final table)
+        7, // level 45
+        5, // level 46
+        3, // level 47 (last level)
+        1, // winner (sentinel)
+  ]
+  if (levelIndex < 0) return 18000
+  if (levelIndex >= curve.length) return 1
+  return curve[levelIndex]
+}
+
+export function getEliminationsForLevel(levelIndex: number): number {
+  return getPlayersLeftAtLevelStart(levelIndex) - getPlayersLeftAtLevelStart(levelIndex + 1)
+}
+
+// Split total into n random non-negative integer parts that sum to total
+export function randomPartition(total: number, parts: number): number[] {
+  if (total <= 0) return Array(parts).fill(0)
+  if (parts === 1) return [total]
+  const cuts = Array.from({ length: parts - 1 }, () =>
+    Math.floor(Math.random() * (total + 1))
+  ).sort((a, b) => a - b)
+  const result: number[] = []
+  let prev = 0
+  for (const cut of cuts) {
+    result.push(cut - prev)
+    prev = cut
+  }
+  result.push(total - prev)
+  return result
 }

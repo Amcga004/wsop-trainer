@@ -12,6 +12,7 @@ import {
   getPlayersLeft, STARTING_STACK, TOTAL_LEVELS,
   HANDS_PER_LEVEL, ITM_PLAYERS, isNearBubble, isItm,
   getDealerButtonForHand, DAY2_START_LEVEL, DAY3_START_LEVEL,
+  getPlayersLeftAtLevelStart, randomPartition,
 } from '../engine/tournamentStructure'
 import { QSCORE, QLABEL, type Quality, type SessionMode, type DecisionRecord } from '../types'
 
@@ -191,6 +192,11 @@ export interface GameState {
   // Chip history for graph
   chipHistory:      number[]
   heroStack:        number
+
+  // Hand-by-hand field reduction (ITM / near-bubble)
+  handEliminations:      number[]  // [9] per-hand eliminations for current level
+  justMadeMoney:         boolean
+  justReachedFinalTable: boolean
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -198,6 +204,12 @@ export interface GameState {
 // ─────────────────────────────────────────────────────────────
 
 function r500(n: number): number { return Math.round(n / 500) * 500 }
+
+function generateHandEliminations(levelIndex: number, currentPlayersLeft: number): number[] {
+  const playersAtEnd = getPlayersLeftAtLevelStart(levelIndex + 1)
+  const total = Math.max(0, currentPlayersLeft - playersAtEnd)
+  return randomPartition(total, HANDS_PER_LEVEL)
+}
 
 function getStartingStack(mode: SessionMode, levelIndex: number): number {
   const bb = getBB(levelIndex)
@@ -233,10 +245,10 @@ function makeInitialState(mode: SessionMode): GameState {
     ...seat,
     stack: i === heroSeatIndex ? heroStack : getVillainStack(mode, startLevel),
   }))
-  const startingPlayersLeft =
-    mode === 'day3' ? 500 :
-    mode === 'day2' ? 3000 :
-    18000
+  const startingPlayersLeft = getPlayersLeftAtLevelStart(startLevel)
+  const startingHandElims = startingPlayersLeft <= ITM_PLAYERS + 500
+    ? generateHandEliminations(startLevel, startingPlayersLeft)
+    : Array(HANDS_PER_LEVEL).fill(0)
   return {
     phase:            'lobby',
     mode,
@@ -263,6 +275,9 @@ function makeInitialState(mode: SessionMode): GameState {
     sessionDecisions: [],
     chipHistory:      [heroStack],
     heroStack,
+    handEliminations:      startingHandElims,
+    justMadeMoney:         false,
+    justReachedFinalTable: false,
   }
 }
 
@@ -623,8 +638,20 @@ export function useGameState(initialMode: SessionMode = 'full') {
 
       const newTotalHands  = prev.totalHands + 1
       const newHandInLevel = prev.handInLevel + 1
-      const newPlayersLeft = Math.max(1, getPlayersLeft(prev.levelIndex))
       const heroStack      = prev.heroStack
+
+      // Compute newPlayersLeft — hand-by-hand when near bubble / ITM,
+      // steady within level otherwise (jumps at level boundaries below)
+      let newPlayersLeft: number
+      if (prev.playersLeft <= ITM_PLAYERS + 500) {
+        const elim = prev.handEliminations[prev.handInLevel] ?? 0
+        newPlayersLeft = Math.max(1, prev.playersLeft - elim)
+      } else {
+        newPlayersLeft = prev.playersLeft
+      }
+
+      const justMadeMoney         = !prev.isItm && newPlayersLeft <= ITM_PLAYERS
+      const justReachedFinalTable = prev.playersLeft > 9 && newPlayersLeft <= 9
 
       // Save decisions to DB
       if (prev.tournamentId) {
@@ -652,41 +679,54 @@ export function useGameState(initialMode: SessionMode = 'full') {
         return { ...prev, phase: 'bust', playersLeft: newPlayersLeft }
       }
 
-      // ITM check
+      // ITM check — first time entering the money
       if (!prev.isItm && isItm(newPlayersLeft)) {
         return {
           ...prev,
-          totalHands:  newTotalHands,
-          handInLevel: newHandInLevel,
-          playersLeft: newPlayersLeft,
-          isItm:       true,
-          phase:       'itm',
+          totalHands:            newTotalHands,
+          handInLevel:           newHandInLevel,
+          playersLeft:           newPlayersLeft,
+          isItm:                 true,
+          justMadeMoney:         true,
+          justReachedFinalTable: false,
+          phase:                 'itm',
         }
       }
 
       // Level up check
       if (newHandInLevel >= HANDS_PER_LEVEL) {
         const newLevelIndex = prev.levelIndex + 1
+        // At level boundary, use authoritative curve value
+        const levelPlayersLeft = getPlayersLeftAtLevelStart(newLevelIndex)
+        const newHandElims = levelPlayersLeft <= ITM_PLAYERS + 500
+          ? generateHandEliminations(newLevelIndex, levelPlayersLeft)
+          : Array(HANDS_PER_LEVEL).fill(0) as number[]
         if (newLevelIndex >= TOTAL_LEVELS) {
           return {
             ...prev,
-            totalHands:  newTotalHands,
-            handInLevel: 0,
-            levelIndex:  newLevelIndex,
-            playersLeft: newPlayersLeft,
-            chipHistory: [...prev.chipHistory, heroStack],
-            phase:       'win',
+            totalHands:            newTotalHands,
+            handInLevel:           0,
+            levelIndex:            newLevelIndex,
+            playersLeft:           levelPlayersLeft,
+            handEliminations:      newHandElims,
+            chipHistory:           [...prev.chipHistory, heroStack],
+            justMadeMoney:         false,
+            justReachedFinalTable,
+            phase:                 'win',
           }
         }
         const isDayBreak = getDay(newLevelIndex) !== getDay(prev.levelIndex)
         return {
           ...prev,
-          totalHands:  newTotalHands,
-          handInLevel: 0,
-          levelIndex:  newLevelIndex,
-          playersLeft: newPlayersLeft,
-          chipHistory: [...prev.chipHistory, heroStack],
-          phase:       isDayBreak ? 'day_break' : 'level_up',
+          totalHands:            newTotalHands,
+          handInLevel:           0,
+          levelIndex:            newLevelIndex,
+          playersLeft:           levelPlayersLeft,
+          handEliminations:      newHandElims,
+          chipHistory:           [...prev.chipHistory, heroStack],
+          justMadeMoney:         false,
+          justReachedFinalTable,
+          phase:                 isDayBreak ? 'day_break' : 'level_up',
         }
       }
 
@@ -756,20 +796,22 @@ export function useGameState(initialMode: SessionMode = 'full') {
 
       return {
         ...prev,
-        engine:          finalEngine,
-        tableSeats:      updatedTableSeats,
-        dealerButton:    btn,
-        totalHands:      newTotalHands,
-        handInLevel:     newHandInLevel,
-        playersLeft:     newPlayersLeft,
-        heroStack:       finalEngine.heroSeat.stack,
-        heroStackBefore: stackBefore2,
-        streetResults:   [],
-        lastOption:      null,
-        lastChipDelta:   0,
-        guessOptions:    [],
-        guessCorrect:    '',
-        phase:           finalEngine.isOver ? 'recap' : 'playing',
+        engine:                finalEngine,
+        tableSeats:            updatedTableSeats,
+        dealerButton:          btn,
+        totalHands:            newTotalHands,
+        handInLevel:           newHandInLevel,
+        playersLeft:           newPlayersLeft,
+        heroStack:             finalEngine.heroSeat.stack,
+        heroStackBefore:       stackBefore2,
+        streetResults:         [],
+        lastOption:            null,
+        lastChipDelta:         0,
+        guessOptions:          [],
+        guessCorrect:          '',
+        justMadeMoney:         false,
+        justReachedFinalTable,
+        phase:                 finalEngine.isOver ? 'recap' : 'playing',
       }
     })
   }, [])
@@ -795,14 +837,16 @@ export function useGameState(initialMode: SessionMode = 'full') {
       }
       return {
         ...prev,
-        engine:          finalEngine,
-        tableSeats:      updatedTableSeats,
-        dealerButton:    btn,
-        heroStack:       finalEngine.heroSeat.stack,
-        heroStackBefore: stackBefore3,
-        streetResults:   [],
-        lastOption:      null,
-        phase:           finalEngine.isOver ? 'recap' : 'playing',
+        engine:                finalEngine,
+        tableSeats:            updatedTableSeats,
+        dealerButton:          btn,
+        heroStack:             finalEngine.heroSeat.stack,
+        heroStackBefore:       stackBefore3,
+        streetResults:         [],
+        lastOption:            null,
+        justMadeMoney:         false,
+        justReachedFinalTable: false,
+        phase:                 finalEngine.isOver ? 'recap' : 'playing',
       }
     })
   }, [])

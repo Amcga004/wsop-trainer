@@ -1114,6 +1114,7 @@ export default function GamePage() {
     phase, engine, streetResults, lastOption, lastChipDelta, lastDecision,
     heroStack, heroStackBefore, levelIndex, playersLeft, sessionScore, sessionMaxScore,
     guessOptions, guessCorrect, totalHands, heroSeatIndex,
+    justMadeMoney, justReachedFinalTable,
   } = state
 
   // Reload home-screen data whenever we return to lobby
@@ -1521,7 +1522,7 @@ export default function GamePage() {
     )
   }
 
-  if (phase === 'itm') {
+  if (phase === 'itm' || justMadeMoney) {
     return (
       <div className="h-screen flex flex-col max-w-lg mx-auto" style={{ background: '#0d1117' }}>
         <MobileHeader />
@@ -1535,6 +1536,27 @@ export default function GamePage() {
           <button onClick={continueTournament}
             className="w-full py-3.5 rounded-xl font-['Syne'] font-bold text-sm text-[#0d0d0d] transition-colors hover:bg-[#e6b84a]"
             style={{ background: '#d4a843' }}>
+            Keep Playing →
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (justReachedFinalTable) {
+    return (
+      <div className="h-screen flex flex-col max-w-lg mx-auto" style={{ background: '#0d1117' }}>
+        <MobileHeader />
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div className="border border-[#3fb950]/25 rounded-xl p-5 text-center"
+            style={{ background: 'rgba(63,185,80,0.06)' }}>
+            <div className="text-[#3fb950] font-['Syne'] text-xl font-bold">★ Final Table!</div>
+            <div className="text-[#8b949e] text-sm mt-1">{playersLeft} players remain · {fmtF(heroStack)}</div>
+          </div>
+          <div className="text-[#484f58] text-xs text-center">9 players left. Every decision is for serious money.</div>
+          <button onClick={continueTournament}
+            className="w-full py-3.5 rounded-xl font-['Syne'] font-bold text-sm text-[#0d0d0d] transition-colors"
+            style={{ background: '#3fb950' }}>
             Keep Playing →
           </button>
         </div>
