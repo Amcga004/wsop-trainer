@@ -51,6 +51,7 @@ export interface Seat {
   folded:     boolean
   allIn:      boolean
   invested:   number        // total chips put in this hand
+  isEmpty?:   boolean       // true = vacant seat (final table, fewer players)
 }
 
 export interface HeroDecision {
@@ -153,6 +154,17 @@ const PREFLOP_ORDER: Position[] = [
 const POSTFLOP_ORDER: Position[] = [
   'SB', 'BB', 'UTG', 'UTG1', 'UTG2', 'LJ', 'HJ', 'CO', 'BTN'
 ]
+
+export function getActiveTableSize(playersLeft: number): number {
+  if (playersLeft >= 9) return 9
+  return Math.max(2, playersLeft)
+}
+
+export function getPositionsForTableSize(size: number): Position[] {
+  const all: Position[] = ['UTG', 'UTG1', 'UTG2', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB']
+  if (size >= 9) return all
+  return all.slice(9 - size)
+}
 
 const VILLAIN_NAMES = [
   'A. Chen', 'R. Polk', 'J. Martinez', 'D. Kim',
@@ -1096,6 +1108,17 @@ function generateHeroOptions(
     const isLP  = ['BTN', 'CO', 'HJ'].includes(heroSeat.position)
     const isOOP = ['SB', 'BB', 'UTG', 'UTG1', 'UTG2'].includes(heroSeat.position)
 
+    // ICM and shove detection
+    const opponentStacks = activeSeats
+      ?.filter(s => !s.folded && s.seatIndex !== heroSeat.seatIndex)
+      .map(s => s.stack) ?? []
+    const minOpponentStack = opponentStacks.length > 0 ? Math.min(...opponentStacks) : currentBet
+    const facingShove = currentBet > 0 && currentBet >= minOpponentStack * 0.80
+    const isNearFinalTable = playersLeft <= 27
+    const isFinalTable = playersLeft <= 9
+    const marginalVsShove = ['KJs','KQo','QJs','AJo','KJo','ATo','JTs','T9s','QJo','KTs']
+    const isMarginalVsShove = marginalVsShove.includes(heroHandStr)
+
     // Sizing
     const depthMult = depth > 100 ? 3.0 : depth > 75 ? 2.5 : depth > 50 ? 2.2 : 2.0
     const oopBonus  = isOOP ? 0.3 : 0.0
@@ -1329,14 +1352,20 @@ function generateHeroOptions(
 
     // ── SCENARIO: FACING A 3-BET ─────────────────────────
     else if (raisers === 2) {
+      const shoveIcmFold = facingShove && isFinalTable && isMarginalVsShove
+      const shoveIcmMarginal = facingShove && isNearFinalTable && !isFinalTable && isMarginalVsShove
+
       // 1. FOLD
       options.push({
         label: 'Fold',
         type: 'fold',
         amount: 0,
         chipCost: 0,
-        quality: (inVs3bet || in4bet) ? 'bad' : 'best',
-        coaching: (inVs3bet || in4bet)
+        quality: shoveIcmFold ? 'best' :
+                 (inVs3bet || in4bet) ? 'bad' : 'best',
+        coaching: shoveIcmFold
+          ? `Correct fold. ${heroHandStr} vs a shove at the final table is a losing call. Pay jumps are massive — preserve your stack and wait for a better spot. KJs/QJs/AJo do not perform well vs shoving ranges.`
+          : (inVs3bet || in4bet)
           ? `${heroHandStr} is strong enough to continue vs a 3-bet. Don't fold.`
           : `Correct fold. ${heroHandStr} is not strong enough to continue vs a 3-bet.`,
       })
@@ -1348,8 +1377,12 @@ function generateHeroOptions(
           type: 'call',
           amount: currentBet,
           chipCost: callCost,
-          quality: inVs3bet ? 'best' : 'bad',
-          coaching: inVs3bet
+          quality: (inVs3bet && shoveIcmFold) ? 'bad' :
+                   (inVs3bet && shoveIcmMarginal) ? 'ok' :
+                   inVs3bet ? 'best' : 'bad',
+          coaching: shoveIcmFold && inVs3bet
+            ? `${heroHandStr} calls vs a 3-bet normally, but this is a shove at the final table. ICM pressure is severe — folding preserves massive pay jumps.`
+            : inVs3bet
             ? `${heroHandStr} is in your vs-3bet calling range. Good call.`
             : `Calling ${heroHandStr} vs a 3-bet leaks chips. Fold.`,
         })
@@ -1359,8 +1392,12 @@ function generateHeroOptions(
           type: 'shove',
           amount: heroSeat.stack,
           chipCost: heroSeat.stack,
-          quality: inVs3bet ? 'best' : 'bad',
-          coaching: inVs3bet
+          quality: (inVs3bet && shoveIcmFold) ? 'bad' :
+                   (inVs3bet && shoveIcmMarginal) ? 'ok' :
+                   inVs3bet ? 'best' : 'bad',
+          coaching: shoveIcmFold && inVs3bet
+            ? `${heroHandStr} is marginal vs a shove at the final table. The ICM cost of busting is too high — fold and wait for a premium.`
+            : inVs3bet
             ? `Calling all-in with ${heroHandStr} vs the 3-bet. You're committed.`
             : `Calling all-in with ${heroHandStr} vs a 3-bet leaks chips.`,
         })
@@ -2114,6 +2151,16 @@ export function createHand(
     invested: 0,
   }))
 
+  // Mark seats beyond active table size as empty (final table shorthand)
+  const tableSize = getActiveTableSize(playersLeft)
+  for (const seat of updatedSeats) {
+    if (seat.seatIndex !== heroSeatIndex && seat.seatIndex >= tableSize) {
+      seat.isEmpty = true
+      seat.folded = true
+      seat.holeCards = null
+    }
+  }
+
   const bb = getBB(levelIndex)
   const sb = getSB(levelIndex)
   const ante = getAnte(levelIndex)
@@ -2137,7 +2184,7 @@ export function createHand(
     board: [],
     pot: startingPot,
     street: 'preflop',
-    activeSeats: [...updatedSeats],
+    activeSeats: updatedSeats.filter(s => !s.isEmpty),
     streetLog: [],
     handLog: [],
     usedCards,
@@ -2154,9 +2201,9 @@ export function createHand(
     showdownSeat: null,
   }
 
-  // Initialize villain profiles for all non-hero seats
+  // Initialize villain profiles for all non-hero active seats
   engine.villainProfiles = updatedSeats
-    .filter(s => s.seatIndex !== heroSeatIndex)
+    .filter(s => s.seatIndex !== heroSeatIndex && !s.isEmpty)
     .map(s => ({
       seatIndex:      s.seatIndex,
       position:       s.position,
@@ -2169,6 +2216,7 @@ export function createHand(
   // Deal all villain hands upfront from shuffled remaining deck
   for (const seat of updatedSeats) {
     if (seat.seatIndex === heroSeatIndex) continue
+    if (seat.isEmpty) continue
     const c1 = engine.deck.shift()
     const c2 = engine.deck.shift()
     if (c1 && c2) {

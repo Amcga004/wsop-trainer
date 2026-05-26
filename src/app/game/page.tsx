@@ -589,6 +589,17 @@ function TableVisual({ engine, heroSeatIndex, compact = false, onSeatClick }: {
         const isHero = seat.seatIndex === heroSeatIndex
         const isActive = !seat.folded
 
+        // Vacant seat at the final table
+        if (seat.isEmpty && !isHero) {
+          return (
+            <div key={seat.seatIndex} className="absolute z-20"
+              style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -50%)' }}>
+              <div className="w-10 h-10 rounded-full border-2 border-dashed"
+                style={{ borderColor: '#30363d', opacity: 0.25 }} />
+            </div>
+          )
+        }
+
         return (
           <div key={seat.seatIndex}
             className="absolute z-20 transition-opacity hover:opacity-80 active:opacity-60"
@@ -1658,20 +1669,37 @@ export default function GamePage() {
     }
     const STREET_LABELS = ['Preflop', 'Flop', 'Turn', 'River']
 
-    function handToCards(handStr: string): { r: string; s: string }[] {
+    function handToCards(
+      handStr: string,
+      knownCards: Set<string> = new Set()
+    ): { r: string; s: string }[] {
       if (handStr.length < 2) return []
-      const SUITS = ['♠', '♥', '♦', '♣']
+      const ALL_SUITS = ['♠', '♥', '♦', '♣']
+
+      function availSuit(rank: string, excludeSuits: string[] = []): string {
+        for (const s of ALL_SUITS) {
+          if (!excludeSuits.includes(s) && !knownCards.has(rank + s)) return s
+        }
+        return ALL_SUITS.find(s => !excludeSuits.includes(s)) ?? ALL_SUITS[0]
+      }
+
       if (handStr.length === 2) {
-        return [{ r: handStr[0], s: '♠' }, { r: handStr[1], s: '♥' }]
+        // Pair — pick two different suits for the same rank
+        const rank = handStr[0]
+        const s1 = availSuit(rank)
+        const s2 = availSuit(rank, [s1])
+        return [{ r: rank, s: s1 }, { r: rank, s: s2 }]
       }
       const r1 = handStr[0]
       const r2 = handStr[1]
       const suited = handStr.endsWith('s')
-      const s1 = SUITS[Math.floor(Math.random() * 4)]
       if (suited) {
-        return [{ r: r1, s: s1 }, { r: r2, s: s1 }]
+        const suit = ALL_SUITS.find(s => !knownCards.has(r1 + s) && !knownCards.has(r2 + s))
+          ?? availSuit(r1)
+        return [{ r: r1, s: suit }, { r: r2, s: suit }]
       }
-      const s2 = SUITS.find(s => s !== s1) ?? '♥'
+      const s1 = availSuit(r1)
+      const s2 = availSuit(r2, [s1])
       return [{ r: r1, s: s1 }, { r: r2, s: s2 }]
     }
 
@@ -1710,7 +1738,11 @@ export default function GamePage() {
             </div>
             <div className="grid grid-cols-2 gap-2">
               {guessOptions.map((opt, i) => {
-                const cards = handToCards(opt)
+                const knownCardsForDisplay = new Set<string>([
+                  ...(engine.heroSeat.holeCards?.map(c => c.r + c.s) ?? []),
+                  ...engine.board.map(c => c.r + c.s),
+                ])
+                const cards = handToCards(opt, knownCardsForDisplay)
                 return (
                   <button key={i} onClick={() => submitGuess(opt)}
                     className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 active:scale-[0.97] transition-all hover:border-[#d4a843]"

@@ -306,9 +306,40 @@ function buildGuessOptions(engine: HandEngine): { options: string[]; correct: st
   const [c1, c2] = villain.holeCards
   const correct = toHandNotation(c1.r, c2.r, c1.s === c2.s)
 
+  // Build set of cards that cannot appear in wrong answer display
+  const knownCards = new Set<string>()
+  engine.heroSeat.holeCards?.forEach(c => knownCards.add(c.r + c.s))
+  engine.board.forEach(c => knownCards.add(c.r + c.s))
+  villain.holeCards.forEach(c => knownCards.add(c.r + c.s))
+
+  const SUITS = ['♠', '♥', '♦', '♣']
+
+  function handConflicts(handStr: string): boolean {
+    if (handStr.length < 2) return true
+    if (handStr.length === 2) {
+      // Pair: need 2 cards of same rank in different suits
+      const rank = handStr[0]
+      const available = SUITS.filter(s => !knownCards.has(rank + s))
+      return available.length < 2
+    }
+    const r1 = handStr[0]
+    const r2 = handStr[1]
+    const suited = handStr.endsWith('s')
+    if (suited) {
+      // Need both ranks in the same suit
+      for (const suit of SUITS) {
+        if (!knownCards.has(r1 + suit) && !knownCards.has(r2 + suit)) return false
+      }
+      return true
+    }
+    // Offsuit: just need any available suit for each rank
+    const r1Avail = SUITS.some(s => !knownCards.has(r1 + s))
+    const r2Avail = SUITS.some(s => !knownCards.has(r2 + s))
+    return !r1Avail || !r2Avail
+  }
+
   const vs = engine.primaryVillain?.rangeStrength ?? 5
 
-  // Determine which tiers are likely based on villain range strength
   const likelyPool   = vs >= 8 ? [...HAND_TIERS.premium, ...HAND_TIERS.strong]
                      : vs >= 6 ? [...HAND_TIERS.strong, ...HAND_TIERS.medium]
                      : vs >= 4 ? [...HAND_TIERS.medium, ...HAND_TIERS.speculative]
@@ -319,7 +350,10 @@ function buildGuessOptions(engine: HandEngine): { options: string[]; correct: st
                      : [...HAND_TIERS.premium, ...HAND_TIERS.bluff]
 
   function pickFrom(pool: string[], exclude: string[], n: number): string[] {
-    return pool.filter(h => !exclude.includes(h)).sort(() => Math.random() - 0.5).slice(0, n)
+    return pool
+      .filter(h => !exclude.includes(h) && !handConflicts(h))
+      .sort(() => Math.random() - 0.5)
+      .slice(0, n)
   }
 
   const chosen: string[] = [correct]
@@ -327,15 +361,13 @@ function buildGuessOptions(engine: HandEngine): { options: string[]; correct: st
   chosen.push(...pickFrom(possiblePool, chosen, 2))
   chosen.push(...pickFrom(unlikelyPool, chosen, 1))
 
-  // Pad to 6 with fallback if pools were too small
   const fallback = ['AKo','QJs','TT','87s','AQs','KK','99','JTs','A5s','66','AJo','KQo']
   while (chosen.length < 6) {
-    const fb = fallback.find(h => !chosen.includes(h))
+    const fb = fallback.find(h => !chosen.includes(h) && !handConflicts(h))
     if (fb) chosen.push(fb)
     else break
   }
 
-  // Shuffle
   const shuffled = chosen.slice(0, 6)
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1))
@@ -770,14 +802,18 @@ export function useGameState(initialMode: SessionMode = 'full') {
         }
       }
 
-      // Replace busted villains with new tournament entrants
+      // At the final table: no replacements — seats stay empty via tableSize rule
+      // Below the final table: replace busted villains with new tournament entrants
       const maxStack = Math.max(heroStack, ...villainStacks.values())
       const maxNew   = r100v(maxStack * 1.1)
-      villainStacks.forEach((stack, seatIdx) => {
-        if (stack <= minStack) {
-          villainStacks.set(seatIdx, r100v(minNew + Math.random() * (maxNew - minNew)))
-        }
-      })
+      const isFinalTable = newPlayersLeft <= 9
+      if (!isFinalTable) {
+        villainStacks.forEach((stack, seatIdx) => {
+          if (stack <= minStack) {
+            villainStacks.set(seatIdx, r100v(minNew + Math.random() * (maxNew - minNew)))
+          }
+        })
+      }
 
       const updatedTableSeats = prev.tableSeats.map((seat, i) => {
         if (i === prev.heroSeatIndex) return { ...seat, stack: heroStack }
