@@ -60,6 +60,10 @@ export const TOTAL_LEVELS = LEVELS.length  // 47
 export const HANDS_PER_LEVEL = 9
 export const STARTING_STACK = 40000        // 2024 WSOP starting stack
 
+export const DAY1_START_LEVEL = 0
+export const DAY2_START_LEVEL = 22   // Level 23 (0-indexed)
+export const DAY3_START_LEVEL = 39   // Level 40 (0-indexed)
+
 export function getDealerButtonForHand(
   handInLevel: number,
   heroSeatIndex: number

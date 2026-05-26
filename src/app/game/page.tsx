@@ -1219,10 +1219,10 @@ export default function GamePage() {
             <div className="rounded-xl border border-[#30363d] p-4" style={{ background: '#161b22' }}>
               <div className="grid grid-cols-2 gap-2 mb-3">
                 {([
-                  { mode: 'full', label: 'Full Tournament', desc: 'All 47 levels · 423 hands' },
-                  { mode: 'day1', label: 'Day 1',           desc: 'Levels 1-22 · 198 hands' },
-                  { mode: 'day2', label: 'Day 2',           desc: 'Levels 23-39 · 153 hands' },
-                  { mode: 'day3', label: 'Day 3+',          desc: 'Levels 40-47 · 72 hands' },
+                  { mode: 'full', label: 'Full Tournament', desc: 'Levels 1-47 · 40,000 chips · 18,000 players' },
+                  { mode: 'day1', label: 'Day 1',           desc: 'Levels 1-22 · 40,000 chips · Full field' },
+                  { mode: 'day2', label: 'Day 2',           desc: 'Levels 23-39 · ~50BB starting · 3,000 remain' },
+                  { mode: 'day3', label: 'Day 3+',          desc: 'Levels 40-47 · ~30BB starting · 500 remain' },
                 ] as const).map(({ mode, label, desc }) => (
                   <button key={mode} onClick={() => setSelectedMode(mode)}
                     className="rounded-lg p-2.5 text-left transition-all"

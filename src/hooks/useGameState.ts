@@ -11,7 +11,7 @@ import {
   getBB, getSB, getAnte, getBBDepth, getDay,
   getPlayersLeft, STARTING_STACK, TOTAL_LEVELS,
   HANDS_PER_LEVEL, ITM_PLAYERS, isNearBubble, isItm,
-  getDealerButtonForHand,
+  getDealerButtonForHand, DAY2_START_LEVEL, DAY3_START_LEVEL,
 } from '../engine/tournamentStructure'
 import { QSCORE, QLABEL, type Quality, type SessionMode, type DecisionRecord } from '../types'
 
@@ -197,9 +197,45 @@ export interface GameState {
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 
+function r500(n: number): number { return Math.round(n / 500) * 500 }
+
+function getStartingStack(mode: SessionMode, levelIndex: number): number {
+  const bb = getBB(levelIndex)
+  switch (mode) {
+    case 'day2': return r500(bb * 50)
+    case 'day3': return r500(bb * 30)
+    default:     return STARTING_STACK
+  }
+}
+
+function getVillainStack(mode: SessionMode, levelIndex: number): number {
+  const bb = getBB(levelIndex)
+  switch (mode) {
+    case 'day2': {
+      const randomBB = 10 + Math.random() * 90   // 10–100BB
+      return r500(bb * randomBB)
+    }
+    case 'day3': {
+      const randomBB = 8 + Math.random() * 42    // 8–50BB
+      return r500(bb * randomBB)
+    }
+    default:
+      return STARTING_STACK
+  }
+}
+
 function makeInitialState(mode: SessionMode): GameState {
-  const startLevel = mode === 'day2' ? 22 : mode === 'day3' ? 39 : 0
-  const tableSeats = createTable(STARTING_STACK)
+  const startLevel = mode === 'day2' ? DAY2_START_LEVEL : mode === 'day3' ? DAY3_START_LEVEL : 0
+  const heroStack  = getStartingStack(mode, startLevel)
+  const rawSeats   = createTable(heroStack)
+  const heroSeatIndex = 4
+  const tableSeats = rawSeats.map((seat, i) =>
+    i === heroSeatIndex ? seat : { ...seat, stack: getVillainStack(mode, startLevel) }
+  )
+  const startingPlayersLeft =
+    mode === 'day3' ? 500 :
+    mode === 'day2' ? 3000 :
+    18000
   return {
     phase:            'lobby',
     mode,
@@ -208,14 +244,14 @@ function makeInitialState(mode: SessionMode): GameState {
     levelIndex:       startLevel,
     handInLevel:      0,
     totalHands:       0,
-    playersLeft:      getPlayersLeft(startLevel),
+    playersLeft:      startingPlayersLeft,
     isItm:            false,
     tableSeats,
     dealerButton:     0,
-    heroSeatIndex:    4,
+    heroSeatIndex,
     engine:           null,
     streetResults:    [],
-    heroStackBefore:  STARTING_STACK,
+    heroStackBefore:  heroStack,
     lastOption:       null,
     lastChipDelta:    0,
     lastDecision:     null,
@@ -224,8 +260,8 @@ function makeInitialState(mode: SessionMode): GameState {
     sessionScore:     0,
     sessionMaxScore:  0,
     sessionDecisions: [],
-    chipHistory:      [STARTING_STACK],
-    heroStack:        STARTING_STACK,
+    chipHistory:      [heroStack],
+    heroStack,
   }
 }
 
