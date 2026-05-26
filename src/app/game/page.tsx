@@ -337,7 +337,7 @@ function TableVisual({ engine, heroSeatIndex, compact = false, onSeatClick }: {
 }) {
   const seats = engine.seats
   const heroSeat = seats[heroSeatIndex]
-  const height = compact ? 180 : 340
+  const height = compact ? 140 : 340
 
   const ellipsePositions = [
     { top: '88%', left: '50%' },
@@ -680,23 +680,18 @@ function ActionBtn({ opt, pot, onClick, disabled }: {
 
   return (
     <button onClick={onClick} disabled={disabled}
-      className="w-full rounded-xl px-4 py-4 text-left active:scale-[0.98] transition-all duration-150"
+      className="w-full rounded-xl px-4 py-2 min-h-[44px] text-left active:scale-[0.98] transition-all duration-150"
       style={{ background: c.bg, border: `1px solid ${c.border}` }}
       onMouseEnter={e => { e.currentTarget.style.background = c.hover }}
       onMouseLeave={e => { e.currentTarget.style.background = c.bg }}>
       <div className="flex items-center justify-between gap-2">
-        <span className="font-semibold text-[14px]" style={{ color: c.text }}>{opt.label}</span>
+        <span className="font-semibold text-[13px]" style={{ color: c.text }}>{opt.label}</span>
         {opt.chipCost > 0 && (
-          <span className="text-[12px] opacity-70 shrink-0" style={{ color: c.text }}>
-            {fmtF(opt.chipCost)}
+          <span className="text-[11px] opacity-70 shrink-0" style={{ color: c.text }}>
+            {fmtF(opt.chipCost)}{pct > 0 ? ` · ${pct}%` : ''}
           </span>
         )}
       </div>
-      {opt.chipCost > 0 && pct > 0 && (
-        <div className="text-[11px] mt-0.5 opacity-50" style={{ color: c.text }}>
-          {pct}% pot
-        </div>
-      )}
     </button>
   )
 }
@@ -1070,21 +1065,17 @@ export default function GamePage() {
   // ── Shared header (mobile) ───────────────────────────────
   function MobileHeader() {
     return (
-      <div className="px-3 py-2 flex-shrink-0 lg:hidden"
+      <div className="px-3 py-1 flex-shrink-0 lg:hidden"
         style={{ background: '#161b22', borderBottom: '1px solid #30363d' }}>
-        <div className="flex items-center justify-between mb-0.5">
-          <span className="text-[#d4a843] text-xs font-bold font-['Syne']">♠ WSOP Main Event</span>
-          <span className={`text-sm font-bold ${bbDepth < 15 ? 'text-[#f85149]' : bbDepth < 25 ? 'text-[#d4a843]' : 'text-[#e6edf3]'}`}>
-            {fmtF(heroStack)} <span className="text-[#484f58] text-[10px]">{bbDepth}BB</span>
+        <div className="flex items-center justify-between">
+          <span className="text-[#d4a843] text-[11px] font-bold font-['Syne']">♠ WSOP Main Event</span>
+          <span className={`text-[11px] font-bold ${bbDepth < 15 ? 'text-[#f85149]' : bbDepth < 25 ? 'text-[#d4a843]' : 'text-[#e6edf3]'}`}>
+            {fmtF(heroStack)} <span className="text-[#484f58] text-[9px]">{bbDepth}BB</span>
           </span>
         </div>
-        <div className="flex items-center justify-between text-[10px] text-[#484f58]">
+        <div className="flex items-center justify-between text-[9px] text-[#484f58]">
           <span>Day {day} · L{levelIndex + 1} · <span className="text-[#d4a843]">{fmtF(sb)}/{fmtF(bb)}</span> · {fmtF(ante)} ante</span>
           <span>Hand <span className="text-[#e6edf3]">{handNum}</span>/{TOTAL_HANDS}</span>
-        </div>
-        <div className="mt-1.5 w-full h-1 bg-[#30363d] rounded-full overflow-hidden">
-          <div className="h-full bg-[#d4a843] rounded-full transition-all"
-            style={{ width: `${Math.min(100, (totalHands / TOTAL_HANDS) * 100)}%` }} />
         </div>
       </div>
     )
@@ -1100,9 +1091,9 @@ export default function GamePage() {
           { label: 'Players', value: `${fmt(playersLeft)}/${fmt(TOTAL_PLAYERS)}`, color: playersLeft <= 2660 ? '#d4a843' : '#3fb950' },
           { label: 'Score',   value: sessionScore + 'pts',                        color: '#d4a843' },
         ] as { label: string; value: string; color: string }[]).map(({ label, value, color }) => (
-          <div key={label} className="py-2 px-1 text-center border-r border-[#30363d] last:border-r-0">
-            <div className="text-[9px] uppercase tracking-widest font-['Syne'] text-[#484f58]">{label}</div>
-            <div className="text-[12px] font-bold" style={{ color }}>{value}</div>
+          <div key={label} className="py-1 px-1 text-center border-r border-[#30363d] last:border-r-0">
+            <div className="text-[8px] uppercase tracking-widest font-['Syne'] text-[#484f58]">{label}</div>
+            <div className="text-[11px] font-bold leading-tight" style={{ color }}>{value}</div>
           </div>
         ))}
       </div>
@@ -1487,7 +1478,7 @@ export default function GamePage() {
         onClose={() => setRangeViewerSeat(null)}
       />
     )}
-    <div className="h-screen flex flex-col overflow-hidden" style={{ background: '#0d1117' }}>
+    <div className="h-[100dvh] flex flex-col overflow-hidden" style={{ background: '#0d1117' }}>
 
       {/* Desktop header */}
       <div className="hidden lg:flex items-center justify-between px-6 py-2.5 flex-shrink-0"
@@ -1574,36 +1565,23 @@ export default function GamePage() {
         </div>
       </div>
 
-      {/* Mobile stacked */}
-      <div className="flex-1 overflow-y-auto lg:hidden">
-        <div className="px-2 pt-2">
+      {/* Mobile stacked — no-scroll layout */}
+      <div className="flex-1 flex flex-col overflow-hidden lg:hidden min-h-0">
+        {/* Table — fixed height */}
+        <div className="flex-shrink-0 px-2 pt-1">
           <TableVisual engine={engine} heroSeatIndex={heroSeatIndex} compact={true}
             onSeatClick={(position, stack) =>
               setRangeViewerSeat({ position, depth: bb > 0 ? Math.floor(stack / bb) : bbDepth })
             } />
         </div>
 
-        <div className="p-3 space-y-3">
-          {/* Street history pills */}
-          {streetResults.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {streetResults.map((r, i) => (
-                <div key={i} className="flex items-center gap-1 rounded-full px-2 py-0.5"
-                  style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <span className="text-[#d4a843] text-[9px] font-bold uppercase font-['Syne']">{r.street}</span>
-                  <span className="text-[#8b949e] text-[9px]">{r.heroAction.label}</span>
-                  <span className={`text-[9px] font-bold ${r.chipDelta < 0 ? 'text-[#f85149]' : r.chipDelta > 0 ? 'text-[#3fb950]' : 'text-[#484f58]'}`}>
-                    {r.chipDelta > 0 ? '+' : ''}{fmtF(r.chipDelta)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Situation card (playing) */}
-          {decision && phase === 'playing' && (
-            <div className="rounded-xl border-l-[3px] border-[#d4a843] p-3" style={{ background: '#161b22' }}>
-              <div className="flex items-center justify-between mb-1.5">
+        {/* Playing phase — everything fits without scroll */}
+        {phase === 'playing' && decision && (
+          <div className="flex-1 flex flex-col min-h-0 px-3 pt-1 pb-2 gap-1.5">
+            {/* Situation card */}
+            <div className="flex-shrink-0 rounded-xl border-l-[3px] border-[#d4a843] px-3 py-2"
+              style={{ background: '#161b22' }}>
+              <div className="flex items-center justify-between mb-1">
                 <span className="text-[#d4a843] text-[9px] uppercase tracking-widest font-['Syne'] font-bold">
                   {decision.street.toUpperCase()}
                 </span>
@@ -1611,9 +1589,9 @@ export default function GamePage() {
                   Pot: {fmtF(decision.pot)}
                 </span>
               </div>
-              <div className="text-[#8b949e] text-[11px] leading-relaxed">{decision.desc}</div>
+              <div className="text-[#8b949e] text-[11px] leading-snug line-clamp-2">{decision.desc}</div>
               {engine.primaryVillain && engine.primaryVillain.rangeStrength > 0 && (
-                <div className="mt-1.5 text-[9px] leading-snug" style={{ color:
+                <div className="mt-1 text-[9px] leading-snug" style={{ color:
                   engine.primaryVillain.rangeStrength >= 8 ? '#f85149' :
                   engine.primaryVillain.rangeStrength >= 6 ? '#d4a843' :
                   engine.primaryVillain.rangeStrength >= 4 ? '#3fb950' :
@@ -1623,61 +1601,53 @@ export default function GamePage() {
                 </div>
               )}
             </div>
-          )}
-          {phase === 'playing' && decision && (
-            <HandMeter heroCards={decision.heroCards} board={decision.board} heroPos={decision.heroPos} bb={bb} heroStack={heroStack} />
-          )}
-
-          {/* Situation card (outcome) */}
-          {lastDecision && phase === 'outcome' && (
-            <div className="rounded-xl border-l-[3px] border-[#d4a843] p-3" style={{ background: '#161b22' }}>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[#d4a843] text-[9px] uppercase tracking-widest font-['Syne'] font-bold">
-                  {lastDecision.street.toUpperCase()}
-                </span>
-                <span className="text-[#e6edf3] text-[10px] font-bold font-['Syne']">
-                  Pot: {fmtF(lastDecision.pot)}
-                </span>
+            {/* Hand meter */}
+            <div className="flex-shrink-0">
+              <HandMeter heroCards={decision.heroCards} board={decision.board}
+                heroPos={decision.heroPos} bb={bb} heroStack={heroStack} />
+            </div>
+            {/* Action buttons — fill remaining, pinned to bottom */}
+            <div className="flex-1 flex flex-col justify-end gap-1.5 min-h-0">
+              <div className="text-[#484f58] text-[8px] uppercase tracking-widest font-['Syne'] font-bold">
+                Your Action
               </div>
-              <div className="text-[#8b949e] text-[11px] leading-relaxed">{lastDecision.desc}</div>
-            </div>
-          )}
-          {phase === 'outcome' && lastDecision && (
-            <HandMeter heroCards={lastDecision.heroCards} board={lastDecision.board} heroPos={lastDecision.heroPos} bb={bb} heroStack={heroStack} />
-          )}
-
-          {nearBubble && (
-            <div className="rounded-xl px-3 py-1.5 text-[#d4a843] text-[10px]"
-              style={{ background: 'rgba(212,168,67,0.07)', border: '1px solid rgba(212,168,67,0.18)' }}>
-              ★ {(playersLeft - 2160).toLocaleString()} spots from the money. ICM pressure HIGH.
-            </div>
-          )}
-          {bbDepth < 15 && (
-            <div className="rounded-xl px-3 py-1.5 text-[#f85149] text-[10px]"
-              style={{ background: 'rgba(248,81,73,0.08)', border: '1px solid rgba(248,81,73,0.20)' }}>
-              ⚠ {bbDepth}BB — Shove or fold only.
-            </div>
-          )}
-
-          {/* Playing */}
-          {phase === 'playing' && decision && (
-            <div className="space-y-2">
-              <div className="text-[#484f58] text-[9px] uppercase tracking-widest font-['Syne'] font-bold">Your Action</div>
               {decision.options.map((opt, i) => (
                 <ActionBtn key={i} opt={opt} pot={decision.pot} onClick={() => takeAction(i)} />
               ))}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Outcome */}
-          {phase === 'outcome' && lastOption && (
-            <RightPanelOutcome
-              lastOption={lastOption} lastDecision={lastDecision}
-              lastChipDelta={lastChipDelta} engine={engine}
-              continueAfterOutcome={continueAfterOutcome}
-              pendingStreetDesc={engine?.pendingStreetDesc ?? ''} />
-          )}
-        </div>
+        {/* Outcome phase — scrollable review */}
+        {phase === 'outcome' && (
+          <div className="flex-1 overflow-y-auto px-3 pt-2 pb-2 space-y-2">
+            {lastDecision && (
+              <div className="rounded-xl border-l-[3px] border-[#d4a843] px-3 py-2"
+                style={{ background: '#161b22' }}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[#d4a843] text-[9px] uppercase tracking-widest font-['Syne'] font-bold">
+                    {lastDecision.street.toUpperCase()}
+                  </span>
+                  <span className="text-[#e6edf3] text-[10px] font-bold font-['Syne']">
+                    Pot: {fmtF(lastDecision.pot)}
+                  </span>
+                </div>
+                <div className="text-[#8b949e] text-[11px] leading-snug">{lastDecision.desc}</div>
+              </div>
+            )}
+            {lastDecision && (
+              <HandMeter heroCards={lastDecision.heroCards} board={lastDecision.board}
+                heroPos={lastDecision.heroPos} bb={bb} heroStack={heroStack} />
+            )}
+            {lastOption && (
+              <RightPanelOutcome
+                lastOption={lastOption} lastDecision={lastDecision}
+                lastChipDelta={lastChipDelta} engine={engine}
+                continueAfterOutcome={continueAfterOutcome}
+                pendingStreetDesc={engine?.pendingStreetDesc ?? ''} />
+            )}
+          </div>
+        )}
       </div>
 
     </div>
