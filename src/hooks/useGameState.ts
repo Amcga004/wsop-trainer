@@ -12,13 +12,14 @@ import {
   getPlayersLeft, STARTING_STACK, TOTAL_LEVELS,
   HANDS_PER_LEVEL, ITM_PLAYERS, isNearBubble, isItm,
   getDealerButtonForHand, DAY2_START_LEVEL, DAY3_START_LEVEL,
-  getPlayersLeftAtLevelStart, randomPartition,
+  getPlayersLeftAtLevelStart, randomPartition, getPayoutForPlace,
 } from '../engine/tournamentStructure'
 import { QSCORE, QLABEL, type Quality, type SessionMode, type DecisionRecord } from '../types'
 
 const ACTIVE_SAVES_KEY = 'wsop_active_saves'
 const COMPLETED_SAVES_KEY = 'wsop_completed_saves'
 const DEVICE_KEY = 'wsop_device_id'
+const EARNINGS_KEY = 'wsop_lifetime_earnings'
 
 function getOrCreateDeviceId(): string {
   try {
@@ -31,6 +32,58 @@ function getOrCreateDeviceId(): string {
     }
     return id
   } catch { return 'unknown' }
+}
+
+// ─────────────────────────────────────────────────────────────
+// LIFETIME EARNINGS
+// ─────────────────────────────────────────────────────────────
+
+export interface EarningsRecord {
+  totalEarnings:      number
+  tournamentsPlayed:  number
+  tournamentsCashed:  number
+  tournamentsWon:     number
+  biggestCash:        number
+  lastUpdated:        number
+  history: Array<{
+    id:          string
+    date:        number
+    payout:      number
+    finishPlace: number
+    finalLevel:  number
+  }>
+}
+
+const EMPTY_EARNINGS: EarningsRecord = {
+  totalEarnings: 0, tournamentsPlayed: 0, tournamentsCashed: 0,
+  tournamentsWon: 0, biggestCash: 0, lastUpdated: 0, history: [],
+}
+
+export function getLifetimeEarnings(): EarningsRecord {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(EARNINGS_KEY) : null
+    if (!raw) return { ...EMPTY_EARNINGS, lastUpdated: Date.now() }
+    return JSON.parse(raw) as EarningsRecord
+  } catch { return { ...EMPTY_EARNINGS, lastUpdated: Date.now() } }
+}
+
+function recordTournamentResult(
+  id: string, payout: number, finishPlace: number,
+  finalLevel: number, won: boolean,
+): void {
+  try {
+    const cur = getLifetimeEarnings()
+    const updated: EarningsRecord = {
+      totalEarnings:     cur.totalEarnings + payout,
+      tournamentsPlayed: cur.tournamentsPlayed + 1,
+      tournamentsCashed: cur.tournamentsCashed + (payout > 0 ? 1 : 0),
+      tournamentsWon:    cur.tournamentsWon + (won ? 1 : 0),
+      biggestCash:       Math.max(cur.biggestCash, payout),
+      lastUpdated:       Date.now(),
+      history: [{ id, date: Date.now(), payout, finishPlace, finalLevel }, ...cur.history].slice(0, 50),
+    }
+    localStorage.setItem(EARNINGS_KEY, JSON.stringify(updated))
+  } catch (e) { console.warn('Could not record earnings', e) }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -890,6 +943,11 @@ export function useGameState(initialMode: SessionMode = 'full') {
   const finalizeTournament = useCallback(async (cashed: boolean) => {
     const s = stateRef.current
     if (!s.tournamentId) return
+    if ((s.mode ?? 'full') === 'full') {
+      const finishPlace = cashed ? 1 : s.playersLeft
+      const payout = getPayoutForPlace(finishPlace)
+      recordTournamentResult(s.tournamentId, payout, finishPlace, s.levelIndex, cashed)
+    }
     deleteActiveSave(s.tournamentId)
     addCompletedSave({
       id:             s.tournamentId,

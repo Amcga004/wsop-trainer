@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useGameState, getActiveSaves, getCompletedSaves, deleteActiveSave, deleteCompletedSave } from '../../hooks/useGameState'
+import { useGameState, getActiveSaves, getCompletedSaves, deleteActiveSave, deleteCompletedSave, getLifetimeEarnings } from '../../hooks/useGameState'
 import type { ActiveSave, CompletedSave } from '../../hooks/useGameState'
 import { QSCORE, QLABEL } from '../../types'
-import { getBB, getSB, getAnte, getBBDepth, getDay, HANDS_PER_LEVEL, TOTAL_LEVELS, TOTAL_PLAYERS } from '../../engine/tournamentStructure'
+import { getBB, getSB, getAnte, getBBDepth, getDay, HANDS_PER_LEVEL, TOTAL_LEVELS, TOTAL_PLAYERS, getPayoutForPlace, getPayoutLabel, PAYOUT_TABLE, ITM_PLAYERS, isItm } from '../../engine/tournamentStructure'
 import type { HeroOption } from '../../engine/handEngine'
 import { evalHand } from '../../engine/handEval'
 import { getRanges, getShoveRanges } from '../../engine/rangeData'
@@ -29,6 +29,18 @@ function fmtMode(mode: string): string {
 }
 const isRed = (s: string) => s === '♥' || s === '♦'
 const TOTAL_HANDS = TOTAL_LEVELS * HANDS_PER_LEVEL
+
+function getNextPayJump(playersLeft: number): { payout: number; atPlayers: number } | null {
+  if (playersLeft <= 1) return null
+  const currentPayout = getPayoutForPlace(playersLeft)
+  let best: { payout: number; atPlayers: number } | null = null
+  for (const [, to, payout] of PAYOUT_TABLE) {
+    if (payout > currentPayout && to < playersLeft) {
+      if (!best || payout < best.payout) best = { payout, atPlayers: to }
+    }
+  }
+  return best
+}
 
 const Q_COLOR: Record<string, string> = {
   best: '#3fb950', good: '#1f6feb', ok: '#d4a843', bad: '#f85149',
@@ -922,6 +934,34 @@ function LeftPanel({ state, bb, sb, ante, day, bbDepth, nearBubble }: {
             </div>
           ))}
         </div>
+        {(() => {
+          const itm = isItm(playersLeft)
+          const currentPayout = getPayoutForPlace(playersLeft)
+          const nextJump = getNextPayJump(playersLeft)
+          const nearBubbleZone = !itm && playersLeft <= ITM_PLAYERS + 500
+          return (
+            <div className="mt-2 pt-2 border-t border-[#30363d] space-y-1">
+              {itm && (
+                <div className="flex justify-between items-baseline">
+                  <span className="text-[#8b949e] text-[11px]">Payout</span>
+                  <span className="text-[#3fb950] text-[12px] font-bold">{getPayoutLabel(currentPayout)}</span>
+                </div>
+              )}
+              {nearBubbleZone && (
+                <div className="flex justify-between items-baseline">
+                  <span className="text-[#8b949e] text-[11px]">Bubble</span>
+                  <span className="text-[#d4a843] text-[12px] font-medium">{(playersLeft - ITM_PLAYERS).toLocaleString()} from money</span>
+                </div>
+              )}
+              {nextJump && (
+                <div className="flex justify-between items-baseline">
+                  <span className="text-[#484f58] text-[10px]">Next jump</span>
+                  <span className="text-[#d4a843] text-[10px]">→ {getPayoutLabel(nextJump.payout)} at {nextJump.atPlayers.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+          )
+        })()}
         {nearBubble && (
           <div className="mt-2 text-[10px] text-[#d4a843] rounded-lg px-2 py-1.5"
             style={{ background: 'rgba(212,168,67,0.10)', border: '1px solid rgba(212,168,67,0.20)' }}>
@@ -1259,6 +1299,68 @@ export default function GamePage() {
             </div>
           </div>
 
+          {/* ── LIFETIME STATS ──────────────────────────── */}
+          {(() => {
+            const earnings = getLifetimeEarnings()
+            if (earnings.tournamentsPlayed === 0) return null
+            const cashPct = Math.round(earnings.tournamentsCashed / earnings.tournamentsPlayed * 100)
+            const net = earnings.totalEarnings - earnings.tournamentsPlayed * 10000
+            return (
+              <div>
+                <div className="text-[#484f58] text-[10px] uppercase tracking-widest font-['Syne'] mb-2 px-1">
+                  Lifetime Stats (Full Tournaments)
+                </div>
+                <div className="rounded-xl border border-[#30363d] p-4" style={{ background: '#161b22' }}>
+                  <div className="text-center mb-3 pb-3 border-b border-[#30363d]">
+                    <div className="text-[#484f58] text-[9px] uppercase tracking-widest font-['Syne'] mb-1">Total Earnings</div>
+                    <div className="font-['Syne'] font-black text-2xl"
+                      style={{ color: earnings.totalEarnings > 0 ? '#3fb950' : '#484f58' }}>
+                      {earnings.totalEarnings > 0 ? getPayoutLabel(earnings.totalEarnings) : '$0'}
+                    </div>
+                    <div className="text-[#484f58] text-[9px] mt-0.5">
+                      Net: <span style={{ color: net >= 0 ? '#3fb950' : '#f85149' }}>
+                        {net >= 0 ? '+' : ''}{getPayoutLabel(Math.abs(net))}
+                      </span>
+                      {' '}after {earnings.tournamentsPlayed}× $10K buy-in
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    {([
+                      { label: 'Played', value: String(earnings.tournamentsPlayed), color: '#e6edf3' },
+                      { label: 'Cashed', value: `${earnings.tournamentsCashed} (${cashPct}%)`, color: earnings.tournamentsCashed > 0 ? '#3fb950' : '#484f58' },
+                      { label: 'Won', value: String(earnings.tournamentsWon), color: earnings.tournamentsWon > 0 ? '#d4a843' : '#484f58' },
+                      { label: 'Best Cash', value: earnings.biggestCash > 0 ? getPayoutLabel(earnings.biggestCash) : '—', color: earnings.biggestCash > 0 ? '#d4a843' : '#484f58' },
+                    ]).map(({ label, value, color }) => (
+                      <div key={label} className="rounded-lg p-2.5 text-center" style={{ background: '#0d1117' }}>
+                        <div className="font-bold text-sm" style={{ color }}>{value}</div>
+                        <div className="text-[#484f58] text-[9px]">{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {earnings.history.length > 0 && (
+                    <div>
+                      <div className="text-[#484f58] text-[9px] uppercase tracking-widest font-['Syne'] mb-1.5">Recent</div>
+                      <div className="space-y-1">
+                        {earnings.history.slice(0, 5).map((h, i) => (
+                          <div key={i} className="flex items-center justify-between">
+                            <div className="text-[#484f58] text-[9px]">
+                              {new Date(h.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                              {' · '}L{h.finalLevel + 1}
+                            </div>
+                            <div className="text-[10px] font-bold"
+                              style={{ color: h.payout > 0 ? '#3fb950' : '#484f58' }}>
+                              {h.payout > 0 ? getPayoutLabel(h.payout) : 'No cash'}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
+
           {/* ── HISTORY ─────────────────────────────────── */}
           {completedSaves.length > 0 && (
             <div>
@@ -1405,17 +1507,37 @@ export default function GamePage() {
   // ── Terminal screens ─────────────────────────────────────
   if (phase === 'bust' || phase === 'win') {
     const isBust = phase === 'bust'
+    const bustPayout = isBust ? getPayoutForPlace(playersLeft) : getPayoutForPlace(1)
+    const didCash = bustPayout > 0
     return (
       <div className="h-screen flex flex-col max-w-lg mx-auto" style={{ background: '#0d1117' }}>
         <MobileHeader />
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <div className="text-center py-8">
+          <div className="text-center py-6">
             <div className="text-5xl mb-3">{isBust ? '♠' : '🏆'}</div>
             <div className={`font-['Syne'] text-2xl font-bold mb-1 ${isBust ? 'text-[#f85149]' : 'text-[#d4a843]'}`}>
               {isBust ? 'Busted Out' : 'Champion!'}
             </div>
             {isBust && <div className="text-[#8b949e] text-sm">Day {day} · Level {levelIndex + 1} · {playersLeft.toLocaleString()} remained</div>}
           </div>
+          {!isBust ? (
+            <div className="rounded-xl border border-[#d4a843]/30 p-4 text-center"
+              style={{ background: 'rgba(212,168,67,0.06)' }}>
+              <div className="text-[#484f58] text-[9px] uppercase tracking-widest font-['Syne'] mb-1">1st Place Prize</div>
+              <div className="text-[#d4a843] font-['Syne'] font-black text-3xl">{getPayoutLabel(bustPayout)}</div>
+            </div>
+          ) : didCash ? (
+            <div className="rounded-xl border border-[#3fb950]/30 p-4"
+              style={{ background: 'rgba(63,185,80,0.06)' }}>
+              <div className="text-[#484f58] text-[9px] uppercase tracking-widest font-['Syne'] mb-1">Tournament Payout</div>
+              <div className="text-[#3fb950] font-['Syne'] font-black text-2xl">{getPayoutLabel(bustPayout)}</div>
+              <div className="text-[#484f58] text-[10px] mt-1">Finished approx. {playersLeft.toLocaleString()}th place</div>
+            </div>
+          ) : (
+            <div className="text-[#484f58] text-sm text-center py-2">
+              Finished outside the money · {playersLeft.toLocaleString()} players remained
+            </div>
+          )}
           <div className="rounded-xl border border-[#d4a843]/20 p-4" style={{ background: '#161b22' }}>
             <div className="text-[#d4a843] font-['Syne'] font-bold text-sm mb-3">Session Score</div>
             <div className="text-3xl font-bold font-['Syne'] text-[#d4a843] mb-1">{sessionScore}

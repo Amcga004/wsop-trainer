@@ -214,6 +214,13 @@ export function getPayoutForPlace(place: number): number {
   return 0
 }
 
+export function getPayoutLabel(payout: number): string {
+  if (payout <= 0) return '$0'
+  if (payout >= 1_000_000) return '$' + (payout / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M'
+  if (payout >= 1_000) return '$' + (payout / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
+  return '$' + payout.toLocaleString()
+}
+
 export function verifyPayoutTable(): number {
   let total = 0
   for (const [from, to, prize] of PAYOUT_TABLE) {
