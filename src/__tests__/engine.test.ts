@@ -384,6 +384,8 @@ describe('Stack integrity', () => {
     if (!callOpt || callOpt.chipCost === 0) return
 
     processHeroAction(engine, callOpt, 0, 18000)
+    // If hand ended (e.g. villain folded after call), engine applies pot directly — skip stack check
+    if (engine.isOver) return
     expect(engine.heroSeat.stack).toBe(initialStack - callOpt.chipCost)
   })
 

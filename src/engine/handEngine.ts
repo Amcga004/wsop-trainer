@@ -1558,6 +1558,21 @@ function generateHeroOptions(
     (hs.pairPos === 'overpair' || hs.pairPos === 'toppair') &&
     isWet
 
+  // OOP monster slow play: hero called preflop, OOP, strong hand, no bet facing
+  // Check to trap villain into betting — leading forfeits the deception value
+  const isOOPMonster =
+    heroCalledPreflop &&
+    !isIP &&
+    currentBet === 0 &&
+    hs !== null &&
+    hs.str >= 3
+
+  // River lead exception: villain passive last street — they won't bet, so lead small
+  const isOOPMonsterRiverLead =
+    isOOPMonster &&
+    street === 'river' &&
+    !villainRaisedLastStreet
+
   // Range / nut awareness for hero
   const heroIsAggressor = heroRaisedPreflop || (streetHistory?.some(
     s => s.street !== 'preflop' && s.heroAction.toLowerCase().includes('bet')
@@ -1732,6 +1747,8 @@ function generateHeroOptions(
                       activePlayers === 3 ? 1.10 : 1.0
   // Check
   const checkQuality: Quality =
+    isOOPMonsterRiverLead ? 'ok' :
+    isOOPMonster ? 'best' :
     isIPFreeShowdownSpot ? 'best' :
     isBlockerBetSpot ? 'good' :
     (handDangerous && street === 'river') ? 'best' :
@@ -1754,7 +1771,11 @@ function generateHeroOptions(
     amount: 0,
     chipCost: 0,
     quality: checkQuality,
-    coaching: isIPFreeShowdownSpot
+    coaching: isOOPMonsterRiverLead
+      ? `Checking is fine but a small lead is better. Villain has been passive and likely won't bet — lead small to extract value from weaker hands they'd call but wouldn't bet themselves.`
+      : isOOPMonster
+      ? `Check and let villain bet into you. You're OOP with ${hs?.label ?? 'a strong hand'} — slow playing traps more chips than leading. Villain bets their range; you can check-raise or call and re-evaluate.`
+      : isIPFreeShowdownSpot
       ? `Check behind and take the free showdown. You're IP with a vulnerable hand on a wet board — checking closes the action and gets you to showdown for free. No reason to bet and face a raise.`
       : isBlockerBetSpot
       ? `Checking is fine but a small blocker bet is better. OOP on the river with a vulnerable hand, a blocker lets you control the pot size and fold cleanly to a raise.`
@@ -1799,6 +1820,10 @@ function generateHeroOptions(
 
   const betQuality = (hs: HandResult | null, sizing: 'sm' | 'med' | 'lg'): Quality => {
     if (!hs) return 'ok'
+    if (isOOPMonsterRiverLead) {
+      return sizing === 'sm' ? 'best' : sizing === 'med' ? 'good' : 'ok'
+    }
+    if (isOOPMonster) return 'bad'
     if (handDangerous && street === 'river') {
       if (hs.str >= 5) return 'good'
       return 'bad'
@@ -1876,7 +1901,11 @@ function generateHeroOptions(
       amount: betSm,
       chipCost: betSm,
       quality: betQuality(hs, 'sm'),
-      coaching: isBlockerBetSpot
+      coaching: isOOPMonsterRiverLead
+        ? `Small lead for value. Villain has been passive and won't bet — lead small (${Math.round(betSm / pot * 100)}% pot) to extract from weaker holdings. If raised, you can call or re-raise depending on villain's tendencies.`
+        : isOOPMonster
+        ? `Don't lead ${hs?.label ?? 'this strong hand'} OOP. Check and let villain bet into you — leading forfeits the trap value. You can check-raise or let them bluff off chips.`
+        : isBlockerBetSpot
         ? `Blocker bet OOP. Small sizing (${Math.round(betSm / pot * 100)}% pot) gets you to showdown cheaply. Villain raises only with hands that beat you — fold to any raise. Villain calls or folds with worse. Never bet large here — you only get called by better.`
         : heroDonking && betQuality(hs, 'sm') === 'bad'
         ? `Avoid donk betting ${hs?.label ?? 'this hand'} into the preflop raiser. Check and let them bet — you can check-raise strong hands or check-call with draws.`
@@ -2487,11 +2516,15 @@ export function processHeroAction(
   }
 
   const stillIn = engine.activeSeats.filter(s => !s.folded)
+
+  // All others folded — hero wins uncontested
   if (stillIn.length <= 1) {
-    engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
+    engine.pendingStreetDesc = actionLines.join('. ')
     engine.isOver = true
-    engine.heroWon = stillIn[0]?.seatIndex === heroSeat.seatIndex
-    if (!engine.heroWon) engine.showdownSeat = stillIn[0] ?? null
+    engine.heroWon = true
+    engine.heroSeat.stack += engine.pot
+    engine.pot = 0
+    engine.currentDecision = null
     return null
   }
 
@@ -2508,8 +2541,8 @@ export function processHeroAction(
     }
   }
 
-  // All players all-in — run out remaining board cards without further user interaction
-  if (stillIn.length >= 2 && stillIn.every(s => s.allIn)) {
+  // All players all-in — run out remaining board cards
+  if (stillIn.every(s => s.allIn)) {
     while (engine.board.length < 5) {
       if (engine.board.length === 0) {
         engine.board.push(engine.deck.shift()!, engine.deck.shift()!, engine.deck.shift()!)
@@ -2518,7 +2551,7 @@ export function processHeroAction(
       }
     }
     engine.street = 'river'
-    engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
+    engine.pendingStreetDesc = actionLines.join('. ')
     engine.isOver = true
     let allInWin = true
     let allInShowdownSeat: Seat | null = null
@@ -2547,14 +2580,41 @@ export function processHeroAction(
     return null
   }
 
-  if (engine.street !== 'river') {
-    engine.pendingAdvance = true
-    engine.pendingStreetDesc = actionLines.length > 0 ? actionLines.join('. ') : ''
-    engine.currentDecision = null
+  // River action complete — evaluate showdown
+  if (engine.street === 'river') {
+    engine.isOver = true
+    let heroWon = true
+    let sdSeat: Seat | null = null
+    let tieCount = 0
+    for (const seat of stillIn) {
+      if (seat.seatIndex === heroSeat.seatIndex) continue
+      if (seat.holeCards) {
+        const cmp = compareHands(
+          heroSeat.holeCards![0], heroSeat.holeCards![1],
+          seat.holeCards[0], seat.holeCards[1],
+          engine.board
+        )
+        if (cmp.tie) { tieCount++ }
+        else if (!cmp.heroWins) { heroWon = false; sdSeat = seat }
+      }
+    }
+    if (!heroWon && tieCount > 0 && sdSeat === null) {
+      engine.heroWon = true
+      engine.isTie = true
+      engine.showdownSeat = stillIn.find(s => s.seatIndex !== heroSeat.seatIndex) ?? null
+    } else {
+      engine.heroWon = heroWon
+      engine.showdownSeat = sdSeat ?? stillIn.find(s => s.seatIndex !== heroSeat.seatIndex) ?? null
+    }
+    resolveShowdown(engine)
     return null
-  } else {
-    return advanceStreet(engine, actionLines, levelIndex, playersLeft)
   }
+
+  // Flop or turn — advance to next street
+  engine.pendingAdvance = true
+  engine.pendingStreetDesc = actionLines.join('. ')
+  engine.currentDecision = null
+  return null
 }
 
 export function advanceToNextStreet(

@@ -494,9 +494,9 @@ export const DEEP_RANGES: Record<Position, RangeSet> = {
     vsRaiseCall: [
       '22','33','44','55','66','77','88','99','TT','JJ',
       'AKs','AQs','AJs','ATs','A9s','A8s','A7s','A5s','A4s',
-      'KQs','KJs','KTs','K9s','K8s','K5s',
-      'QJs','QTs','Q9s',
-      'JTs','J9s','T9s','T8s','98s','87s','76s','65s','54s',
+      'KQs','KJs','KTs','K9s','K8s','K7s','K6s','K5s',
+      'QJs','QTs','Q9s','Q8s','Q7s',
+      'JTs','J9s','J8s','T9s','T8s','98s','97s','87s','76s','65s','54s',
       'AKo','AQo','AJo','ATo',
       'KQo',
     ],
@@ -537,17 +537,19 @@ export const DEEP_RANGES: Record<Position, RangeSet> = {
       // All suited aces
       'AKs','AQs','AJs','ATs','A9s','A8s','A7s','A6s','A5s','A4s','A3s','A2s',
       // Suited kings
-      'KQs','KJs','KTs','K9s','K8s','K7s','K6s','K5s',
+      'KQs','KJs','KTs','K9s','K8s','K7s','K6s','K5s','K4s','K3s','K2s',
       // Suited queens
-      'QJs','QTs','Q9s','Q8s','Q7s',
+      'QJs','QTs','Q9s','Q8s','Q7s','Q6s','Q5s','Q4s','Q3s','Q2s',
       // Suited jacks
-      'JTs','J9s','J8s','J7s',
+      'JTs','J9s','J8s','J7s','J6s','J5s','J4s',
       // All suited connectors and one-gappers — CALL not 3-bet
-      'T9s','T8s','T7s','98s','97s','87s','86s','76s','75s','65s','64s','54s','53s','43s',
-      // Offsuit — A7o+, connected broadways
+      'T9s','T8s','T7s','T6s','T5s','98s','97s','96s','87s','86s','76s','75s','65s','64s','54s','53s','43s',
+      // Offsuit — A7o+, wide kings, queens, jacks
       'AKo','AQo','AJo','ATo','A9o','A8o','A7o',
-      'KQo','KJo','KTo',
-      'QJo','QTo','JTo','T9o','98o','87o',
+      'KQo','KJo','KTo','K9o','K8o','K7o','K6o','K5o','K4o','K3o','K2o',
+      'QJo','QTo','Q9o','Q8o','Q7o',
+      'JTo','J9o','J8o',
+      'T9o','T8o','98o','87o',
     ],
     threebet: [
       // Value only + blocker bluffs — NO suited connectors
