@@ -16,6 +16,24 @@ import {
 import { QSCORE, QLABEL, type Quality, type SessionMode, type DecisionRecord } from '../types'
 
 const SAVE_KEY = 'wsop_trainer_save'
+const DEVICE_KEY = 'wsop_device_id'
+
+function getOrCreateDeviceId(): string {
+  try {
+    const existing = localStorage.getItem(DEVICE_KEY)
+    if (existing) return existing
+    const id = [
+      screen.width, screen.height,
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+      navigator.language,
+      Math.random().toString(36).slice(2, 10),
+    ].join('|')
+    localStorage.setItem(DEVICE_KEY, id)
+    return id
+  } catch {
+    return 'unknown'
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -679,7 +697,9 @@ export function useGameState(initialMode: SessionMode = 'full') {
       const raw = localStorage.getItem(SAVE_KEY)
       if (!raw) return false
       const data = JSON.parse(raw)
-      return Date.now() - data.savedAt < 24 * 60 * 60 * 1000
+      if (Date.now() - data.savedAt >= 24 * 60 * 60 * 1000) return false
+      if (data.deviceId && data.deviceId !== getOrCreateDeviceId()) return false
+      return true
     } catch {
       return false
     }
@@ -687,6 +707,56 @@ export function useGameState(initialMode: SessionMode = 'full') {
 
   const clearSavedGame = useCallback(() => {
     localStorage.removeItem(SAVE_KEY)
+  }, [])
+
+  const saveTournament = useCallback(() => {
+    try {
+      const s = stateRef.current
+      if (s.phase !== 'playing' && s.phase !== 'recap') return
+      const saveData = {
+        heroStack:       s.heroStack,
+        levelIndex:      s.levelIndex,
+        playersLeft:     s.playersLeft,
+        totalHands:      s.totalHands,
+        sessionScore:    s.sessionScore,
+        sessionMaxScore: s.sessionMaxScore,
+        dealerButton:    s.dealerButton,
+        heroSeatIndex:   s.heroSeatIndex,
+        tableSeats:      s.tableSeats.map(seat => ({
+          seatIndex: seat.seatIndex,
+          stack:     seat.stack,
+          archetype: seat.archetype,
+        })),
+        deviceId: getOrCreateDeviceId(),
+        savedAt:  Date.now(),
+      }
+      localStorage.setItem(SAVE_KEY, JSON.stringify(saveData))
+    } catch {
+      // Ignore storage errors
+    }
+  }, [])
+
+  const getSavedGameInfo = useCallback((): {
+    heroStack: number; levelIndex: number; totalHands: number;
+    sessionScore: number; sessionMaxScore: number; savedAt: number
+  } | null => {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY)
+      if (!raw) return null
+      const data = JSON.parse(raw)
+      if (Date.now() - data.savedAt >= 24 * 60 * 60 * 1000) return null
+      if (data.deviceId && data.deviceId !== getOrCreateDeviceId()) return null
+      return {
+        heroStack:       data.heroStack,
+        levelIndex:      data.levelIndex,
+        totalHands:      data.totalHands,
+        sessionScore:    data.sessionScore,
+        sessionMaxScore: data.sessionMaxScore,
+        savedAt:         data.savedAt,
+      }
+    } catch {
+      return null
+    }
   }, [])
 
   const resumeTournament = useCallback(() => {
@@ -746,7 +816,8 @@ export function useGameState(initialMode: SessionMode = 'full') {
             stack:     s.stack,
             archetype: s.archetype,
           })),
-          savedAt: Date.now(),
+          deviceId: getOrCreateDeviceId(),
+          savedAt:  Date.now(),
         }
         localStorage.setItem(SAVE_KEY, JSON.stringify(saveData))
       } catch {
@@ -777,6 +848,8 @@ export function useGameState(initialMode: SessionMode = 'full') {
     resumeTournament,
     hasSavedGame,
     clearSavedGame,
+    saveTournament,
+    getSavedGameInfo,
     bb, sb, ante, bbDepth, day, nearBubble, scorePct,
   }
 }

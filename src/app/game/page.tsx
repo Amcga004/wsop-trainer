@@ -11,6 +11,12 @@ import type { Position } from '../../engine/rangeData'
 
 const fmt  = (n: number): string => n >= 1_000_000 ? (n/1_000_000).toFixed(1)+'M' : n >= 1_000 ? Math.round(n/1_000)+'k' : n.toLocaleString()
 const fmtF = (n: number): string => n.toLocaleString()
+function timeAgo(ts: number): string {
+  const m = Math.floor((Date.now() - ts) / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  return `${Math.floor(m / 60)}h ago`
+}
 const isRed = (s: string) => s === '♥' || s === '♦'
 const TOTAL_HANDS = TOTAL_LEVELS * HANDS_PER_LEVEL
 
@@ -951,11 +957,18 @@ export default function GamePage() {
     useState<'full' | 'day1' | 'day2' | 'day3'>('full')
   const [canResume, setCanResume] = useState(false)
   const [rangeViewerSeat, setRangeViewerSeat] = useState<{ position: string; depth: number } | null>(null)
+  const [showMenu, setShowMenu] = useState(false)
+  const [showNewTournamentConfirm, setShowNewTournamentConfirm] = useState(false)
+  const [showSavedToast, setShowSavedToast] = useState(false)
+  const [savedInfo, setSavedInfo] = useState<{
+    heroStack: number; levelIndex: number; totalHands: number;
+    sessionScore: number; sessionMaxScore: number; savedAt: number
+  } | null>(null)
 
   const {
     state, startTournament, takeAction, continueAfterOutcome,
     submitGuess, nextHand, continueTournament, finalizeTournament,
-    resumeTournament, hasSavedGame, clearSavedGame,
+    resumeTournament, hasSavedGame, clearSavedGame, saveTournament, getSavedGameInfo,
     bb, sb, ante, bbDepth, day, nearBubble, scorePct,
   } = useGameState('full')
 
@@ -966,7 +979,18 @@ export default function GamePage() {
   } = state
 
   useEffect(() => { startTournament('full') }, [])
-  useEffect(() => { setCanResume(hasSavedGame()) }, [])
+  useEffect(() => {
+    const info = getSavedGameInfo()
+    setCanResume(!!info)
+    setSavedInfo(info)
+  }, [])
+  useEffect(() => {
+    if (state.totalHands > 0) {
+      setShowSavedToast(true)
+      const t = setTimeout(() => setShowSavedToast(false), 2000)
+      return () => clearTimeout(t)
+    }
+  }, [state.totalHands])
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setRangeViewerSeat(null) }
     window.addEventListener('keydown', onKey)
@@ -992,13 +1016,28 @@ export default function GamePage() {
             <div className="text-[#484f58] text-sm">Main Event Preparation</div>
           </div>
 
-          {canResume && (
+          {canResume && savedInfo && (
             <div className="rounded-xl border border-[#d4a843]/30 p-4"
               style={{ background: 'rgba(212,168,67,0.06)' }}>
-              <div className="text-[#d4a843] text-sm font-bold font-['Syne'] mb-1">
-                Saved Tournament Found
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[#d4a843] text-sm font-bold font-['Syne']">Saved Tournament</div>
+                <div className="text-[#484f58] text-[10px]">{timeAgo(savedInfo.savedAt)}</div>
               </div>
-              <div className="text-[#8b949e] text-[11px] mb-3">Continue where you left off</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 mb-3">
+                {([
+                  ['Stack', fmtF(savedInfo.heroStack)],
+                  ['Level', String(savedInfo.levelIndex + 1)],
+                  ['Hands', String(savedInfo.totalHands)],
+                  ['Score', savedInfo.sessionMaxScore > 0
+                    ? Math.round(savedInfo.sessionScore / savedInfo.sessionMaxScore * 100) + '%'
+                    : '—'],
+                ] as [string, string][]).map(([label, val]) => (
+                  <div key={label} className="flex justify-between">
+                    <span className="text-[#484f58] text-[11px]">{label}</span>
+                    <span className="text-[#e6edf3] text-[11px] font-medium">{val}</span>
+                  </div>
+                ))}
+              </div>
               <button onClick={resumeTournament}
                 className="w-full py-3 rounded-xl font-['Syne'] font-bold text-sm
                   text-[#0d0d0d] transition-colors hover:bg-[#e6b84a] mb-2"
@@ -1009,7 +1048,7 @@ export default function GamePage() {
                 className="w-full py-2 rounded-xl font-['Syne'] text-sm text-[#484f58]
                   transition-colors hover:text-[#8b949e]"
                 style={{ border: '1px solid #30363d' }}>
-                Start New Tournament
+                Discard &amp; Start New
               </button>
             </div>
           )}
@@ -1069,9 +1108,18 @@ export default function GamePage() {
         style={{ background: '#161b22', borderBottom: '1px solid #30363d' }}>
         <div className="flex items-center justify-between">
           <span className="text-[#d4a843] text-[11px] font-bold font-['Syne']">♠ WSOP Main Event</span>
-          <span className={`text-[11px] font-bold ${bbDepth < 15 ? 'text-[#f85149]' : bbDepth < 25 ? 'text-[#d4a843]' : 'text-[#e6edf3]'}`}>
-            {fmtF(heroStack)} <span className="text-[#484f58] text-[9px]">{bbDepth}BB</span>
-          </span>
+          <div className="flex items-center gap-2">
+            <span className={`text-[11px] font-bold ${bbDepth < 15 ? 'text-[#f85149]' : bbDepth < 25 ? 'text-[#d4a843]' : 'text-[#e6edf3]'}`}>
+              {fmtF(heroStack)} <span className="text-[#484f58] text-[9px]">{bbDepth}BB</span>
+            </span>
+            <button onClick={() => setShowMenu(true)}
+              className="w-7 h-7 flex flex-col items-center justify-center gap-[3px] rounded-lg transition-colors"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid #30363d' }}>
+              <span className="block w-3.5 h-px bg-[#8b949e]" />
+              <span className="block w-3.5 h-px bg-[#8b949e]" />
+              <span className="block w-3.5 h-px bg-[#8b949e]" />
+            </button>
+          </div>
         </div>
         <div className="flex items-center justify-between text-[9px] text-[#484f58]">
           <span>Day {day} · L{levelIndex + 1} · <span className="text-[#d4a843]">{fmtF(sb)}/{fmtF(bb)}</span> · {fmtF(ante)} ante</span>
@@ -1477,6 +1525,80 @@ export default function GamePage() {
         heroCards={engine.heroSeat.holeCards}
         onClose={() => setRangeViewerSeat(null)}
       />
+    )}
+
+    {/* ── Hamburger menu bottom sheet ── */}
+    {showMenu && (
+      <div className="fixed inset-0 z-50 flex items-end justify-center"
+        style={{ background: 'rgba(0,0,0,0.70)' }}
+        onClick={e => { if (e.target === e.currentTarget) setShowMenu(false) }}>
+        <div className="w-full max-w-sm rounded-t-2xl p-5 space-y-3"
+          style={{ background: '#161b22', border: '1px solid #30363d' }}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[#d4a843] font-['Syne'] font-bold text-sm">Menu</span>
+            <button onClick={() => setShowMenu(false)}
+              className="w-7 h-7 rounded-full flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3]"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid #30363d' }}>
+              ✕
+            </button>
+          </div>
+          <button onClick={() => {
+            saveTournament()
+            setShowMenu(false)
+            setShowSavedToast(true)
+            setTimeout(() => setShowSavedToast(false), 2000)
+          }}
+            className="w-full py-3 rounded-xl text-left px-4 font-['Syne'] font-bold text-sm transition-colors hover:bg-[#1f6feb]/20"
+            style={{ background: 'rgba(31,111,235,0.08)', border: '1px solid rgba(31,111,235,0.20)', color: '#1f6feb' }}>
+            Save Progress
+          </button>
+          <button onClick={() => { setShowMenu(false); setShowNewTournamentConfirm(true) }}
+            className="w-full py-3 rounded-xl text-left px-4 font-['Syne'] font-bold text-sm transition-colors hover:bg-[#f85149]/20"
+            style={{ background: 'rgba(248,81,73,0.06)', border: '1px solid rgba(248,81,73,0.20)', color: '#f85149' }}>
+            New Tournament
+          </button>
+        </div>
+      </div>
+    )}
+
+    {/* ── New tournament confirmation ── */}
+    {showNewTournamentConfirm && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-6"
+        style={{ background: 'rgba(0,0,0,0.82)' }}>
+        <div className="w-full max-w-sm rounded-2xl p-5"
+          style={{ background: '#161b22', border: '1px solid #30363d' }}>
+          <div className="text-[#e6edf3] font-['Syne'] font-bold text-base mb-2">Abandon this tournament?</div>
+          <div className="text-[#8b949e] text-[12px] leading-relaxed mb-5">
+            Your current progress will be lost. Any unsaved hands will not be recovered.
+          </div>
+          <div className="flex gap-3">
+            <button onClick={() => setShowNewTournamentConfirm(false)}
+              className="flex-1 py-3 rounded-xl font-['Syne'] text-sm font-bold text-[#8b949e] transition-colors hover:text-[#e6edf3]"
+              style={{ border: '1px solid #30363d' }}>
+              Cancel
+            </button>
+            <button onClick={() => {
+              setShowNewTournamentConfirm(false)
+              clearSavedGame()
+              startTournament('full')
+            }}
+              className="flex-1 py-3 rounded-xl font-['Syne'] font-bold text-sm text-white transition-colors"
+              style={{ background: '#f85149' }}>
+              New Tournament
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ── Auto-save toast ── */}
+    {showSavedToast && (
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2
+        rounded-full px-4 py-2 shadow-lg pointer-events-none"
+        style={{ background: '#161b22', border: '1px solid rgba(63,185,80,0.40)' }}>
+        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: '#3fb950' }} />
+        <span className="text-[#3fb950] text-[12px] font-['Syne'] font-bold whitespace-nowrap">Progress saved</span>
+      </div>
     )}
     <div className="h-[100dvh] flex flex-col overflow-hidden" style={{ background: '#0d1117' }}>
 
