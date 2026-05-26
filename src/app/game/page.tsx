@@ -1315,10 +1315,10 @@ export default function GamePage() {
     const total = heroStack - heroStackBefore
     const heroCards = engine.heroSeat.holeCards
     return (
-      <div className="h-screen flex flex-col max-w-lg mx-auto lg:max-w-2xl" style={{ background: '#0d1117' }}>
+      <div className="h-screen flex flex-col w-full lg:max-w-2xl lg:mx-auto" style={{ background: '#0d1117' }}>
         <MobileHeader /><MobileStatusBar />
-        <div className="flex-1 overflow-y-auto p-3 space-y-3">
-          <div className="border border-[#d4a843]/20 rounded-xl p-3" style={{ background: '#161b22' }}>
+        <div className="flex-1 overflow-y-auto">
+          <div className="border-y border-[#d4a843]/20 p-3 lg:rounded-xl lg:border lg:mx-3 lg:mt-3" style={{ background: '#161b22' }}>
             <div className="flex items-center justify-between mb-3">
               <div className="text-[#d4a843] font-['Syne'] font-bold">Hand #{handNum} Recap</div>
               {heroCards && (
@@ -1373,11 +1373,13 @@ export default function GamePage() {
               </span>
             </div>
           </div>
-          <button onClick={nextHand}
-            className="w-full py-3.5 rounded-xl font-['Syne'] font-bold text-sm text-[#0d0d0d] transition-colors hover:bg-[#e6b84a]"
-            style={{ background: '#d4a843' }}>
-            Next Hand →
-          </button>
+          <div className="px-3 py-3">
+            <button onClick={nextHand}
+              className="w-full py-3.5 rounded-xl font-['Syne'] font-bold text-sm text-[#0d0d0d] transition-colors hover:bg-[#e6b84a]"
+              style={{ background: '#d4a843' }}>
+              Next Hand →
+            </button>
+          </div>
         </div>
       </div>
     )
