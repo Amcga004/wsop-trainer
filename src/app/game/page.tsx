@@ -114,6 +114,7 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
 
   type TabKey = 'rfi' | 'vsRaiseCall' | 'threebet' | 'vs3betCall' | 'fourbet' | 'shove' | 'callShove'
   const [tab, setTab] = useState<TabKey>(isShoveDepth ? 'shove' : 'rfi')
+  const [hoveredHand, setHoveredHand] = useState<string | null>(null)
 
   const rangeSet = getRanges(safePos, bbDepth)
   const shoveSet = getShoveRanges(safePos, bbDepth)
@@ -161,6 +162,32 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
 
   const activeColor = TAB_COLORS[tab] ?? '#3fb950'
 
+  const actionLabel = (inR: boolean): string => {
+    if (!inR) {
+      if (tab === 'rfi')         return 'Fold'
+      if (tab === 'vsRaiseCall') return 'Fold vs Raise'
+      if (tab === 'threebet')    return 'Call or Fold'
+      if (tab === 'vs3betCall')  return 'Fold vs 3-Bet'
+      if (tab === 'fourbet')     return 'Call or Fold'
+      if (tab === 'shove')       return 'Fold'
+      return 'Fold vs Shove'
+    }
+    if (tab === 'rfi')         return 'Open (RFI)'
+    if (tab === 'vsRaiseCall') return 'Call Raise'
+    if (tab === 'threebet')    return '3-Bet'
+    if (tab === 'vs3betCall')  return 'Call 3-Bet'
+    if (tab === 'fourbet')     return '4-Bet'
+    if (tab === 'shove')       return 'Shove'
+    return 'Call Shove'
+  }
+
+  const hoveredInfo = hoveredHand ? {
+    hand: hoveredHand,
+    inR: inRangeSet.has(hoveredHand),
+    color: heroCell === hoveredHand ? '#d4a843' : inRangeSet.has(hoveredHand) ? activeColor : '#484f58',
+    type: hoveredHand.length === 2 ? 'Pocket pair' : hoveredHand.endsWith('s') ? 'Suited' : 'Offsuit',
+  } : null
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.82)' }}
@@ -196,6 +223,34 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
           ))}
         </div>
 
+        {/* Hover tooltip */}
+        {hoveredInfo ? (
+          <div className="mb-3 rounded-xl p-3 flex items-center gap-3"
+            style={{ background: hoveredInfo.color + '20', border: `2px solid ${hoveredInfo.color}` }}>
+            <div className="font-['Syne'] font-black text-3xl flex-shrink-0"
+              style={{ color: hoveredInfo.color }}>
+              {hoveredInfo.hand}
+            </div>
+            <div className="min-w-0">
+              <div className="font-bold text-[#e6edf3] text-base leading-tight">
+                {actionLabel(hoveredInfo.inR)}
+              </div>
+              <div className="text-[#484f58] text-[10px] mt-0.5">
+                {hoveredInfo.type} · {pos} · {bbDepth}BB
+              </div>
+            </div>
+            <div className="ml-auto rounded-lg px-2.5 py-1 text-[11px] font-bold flex-shrink-0"
+              style={{ background: hoveredInfo.color, color: '#0d0d0d' }}>
+              {actionLabel(hoveredInfo.inR)}
+            </div>
+          </div>
+        ) : (
+          <div className="mb-3 rounded-xl p-3 flex items-center justify-center"
+            style={{ height: 60, background: '#0d1117', border: '1px dashed #30363d' }}>
+            <div className="text-[#484f58] text-[11px]">Hover or tap any hand to see details</div>
+          </div>
+        )}
+
         {/* Stats */}
         <div className="text-[10px] text-[#484f58] mb-2">
           {totalCombos} combos · {Math.round(totalCombos / 1326 * 100)}% of hands
@@ -211,7 +266,8 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
 
         {/* 13×13 grid with row headers */}
         {GRID_RANKS.map((r1, i) => (
-          <div key={r1} className="grid mb-[2px]" style={{ gridTemplateColumns: '14px repeat(13, 1fr)', gap: 2 }}>
+          <div key={r1} className="grid mb-[2px]"
+            style={{ gridTemplateColumns: '14px repeat(13, 1fr)', gap: 2, overflow: 'visible' }}>
             <div className="flex items-center justify-center text-[#484f58]" style={{ fontSize: 6 }}>{r1}</div>
             {GRID_RANKS.map((r2, j) => {
               const hand = i === j
@@ -221,8 +277,15 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
                   : r2 + r1 + 'o'
               const inR = inRangeSet.has(hand)
               const isHero = heroCell === hand
+              const isHovered = hoveredHand === hand
               return (
                 <div key={j} title={hand}
+                  onMouseEnter={() => setHoveredHand(hand)}
+                  onMouseLeave={() => setHoveredHand(null)}
+                  onTouchStart={e => {
+                    e.preventDefault()
+                    setHoveredHand(prev => prev === hand ? null : hand)
+                  }}
                   style={{
                     aspectRatio: '1',
                     borderRadius: 2,
@@ -233,6 +296,10 @@ function RangeMatrix({ pos, bbDepth, heroCards, onClose }: {
                     justifyContent: 'center',
                     fontSize: 4,
                     color: isHero ? '#0d0d0d' : inR ? activeColor : '#30363d',
+                    transform: isHovered ? 'scale(1.4)' : 'scale(1)',
+                    zIndex: isHovered ? 10 : 1,
+                    transition: 'transform 0.1s ease',
+                    position: 'relative',
                   }}>
                   {hand}
                 </div>
